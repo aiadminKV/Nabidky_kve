@@ -166,6 +166,7 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
   try {
     const results = await searchProductsFulltext(query, maxResults);
     const slim = results.map((r) => ({
+      id: r.id,
       sku: r.sku,
       name: r.name,
       manufacturer_code: r.manufacturer_code,

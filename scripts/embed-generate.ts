@@ -24,8 +24,8 @@ const DELAY_MS    = parseInt(getArg("delay") ?? "300");
 const INPUT_FILE  = resolve(import.meta.dirname, "../products.jsonl");
 const OUTPUT_FILE = resolve(import.meta.dirname, "../embeddings.jsonl");
 
-const EMBEDDING_MODEL = "text-embedding-3-large";
-const EMBEDDING_DIM   = 1536;
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const EMBEDDING_DIM   = 256;
 const DESC_MAX        = 500;
 const LOG_EVERY       = 10;
 

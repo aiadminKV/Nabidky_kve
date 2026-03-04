@@ -258,6 +258,159 @@ export interface PricelistStats {
   categories: Array<{ category: string; count: number }>;
 }
 
+// ──────────────────────────────────────────────────────────
+// Offers API
+// ──────────────────────────────────────────────────────────
+
+export interface OfferSummary {
+  id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OfferDetail {
+  id: string;
+  title: string;
+  status: string;
+  messages: ChatMessageDTO[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessageDTO {
+  id: string;
+  role: "user" | "assistant" | "system";
+  text: string;
+  timestamp: string;
+}
+
+export interface OfferItemDTO {
+  position: number;
+  originalName: string;
+  unit: string | null;
+  quantity: number | null;
+  matchType: string;
+  confidence: number;
+  product: Product | null;
+  candidates: Product[];
+  confirmed: boolean;
+  extraColumns: Record<string, string>;
+}
+
+export async function listOffers(token: string): Promise<OfferSummary[]> {
+  const res = await fetch(`${BACKEND_URL}/offers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to load offers");
+  const data = await res.json();
+  return data.offers ?? [];
+}
+
+export async function createOffer(
+  title: string,
+  token: string,
+): Promise<OfferSummary> {
+  const res = await fetch(`${BACKEND_URL}/offers`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Create failed: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.offer;
+}
+
+export async function getOffer(
+  id: string,
+  token: string,
+): Promise<{ offer: OfferDetail; items: OfferItemDTO[] }> {
+  const res = await fetch(`${BACKEND_URL}/offers/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Offer not found");
+  return res.json();
+}
+
+export async function updateOffer(
+  id: string,
+  data: { title?: string; status?: string },
+  token: string,
+): Promise<OfferSummary> {
+  const res = await fetch(`${BACKEND_URL}/offers/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update offer");
+  const json = await res.json();
+  return json.offer;
+}
+
+export async function deleteOffer(
+  id: string,
+  token: string,
+): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/offers/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to delete offer");
+}
+
+export async function saveOfferMessages(
+  offerId: string,
+  messages: ChatMessageDTO[],
+  token: string,
+): Promise<void> {
+  await fetch(`${BACKEND_URL}/offers/${offerId}/messages`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ messages }),
+  });
+}
+
+export interface SaveOfferItemInput {
+  position: number;
+  originalName: string;
+  unit?: string | null;
+  quantity?: number | null;
+  matchType?: string;
+  confidence?: number;
+  productId?: string | null;
+  confirmed?: boolean;
+  candidates?: unknown[];
+  extraColumns?: Record<string, string>;
+}
+
+export async function saveOfferItems(
+  offerId: string,
+  items: SaveOfferItemInput[],
+  token: string,
+): Promise<void> {
+  await fetch(`${BACKEND_URL}/offers/${offerId}/items`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ items }),
+  });
+}
+
 /** User profile data */
 export interface UserProfile {
   id: string;

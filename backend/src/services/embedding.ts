@@ -2,8 +2,8 @@ import OpenAI from "openai";
 import { getAdminClient } from "./supabase.js";
 import { env } from "../config/env.js";
 
-export const EMBEDDING_MODEL = "text-embedding-3-large";
-export const EMBEDDING_DIMENSIONS = 1536;
+export const EMBEDDING_MODEL = "text-embedding-3-small";
+export const EMBEDDING_DIMENSIONS = 256;
 const EMBED_BATCH_SIZE = 100;
 const CLEAN_BATCH_SIZE = 20;
 const DESC_CLEAN_THRESHOLD = 150;

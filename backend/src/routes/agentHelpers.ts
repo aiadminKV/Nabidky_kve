@@ -2,6 +2,7 @@ export { fetchProductsBySkus } from "../services/search.js";
 import type { ProductResult } from "../services/search.js";
 
 export const slim = (r: ProductResult) => ({
+  id: r.id,
   sku: r.sku,
   name: r.name,
   manufacturer_code: r.manufacturer_code,

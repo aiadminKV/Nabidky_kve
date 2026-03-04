@@ -15,7 +15,7 @@ export function Header({ email, isAdmin }: HeaderProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const navItems = [
-    { href: "/dashboard", label: "Poptávky" },
+    { href: "/offers", label: "Nabídky" },
     ...(isAdmin ? [{ href: "/pricelist", label: "Ceník" }] : []),
   ];
 
@@ -37,7 +37,7 @@ export function Header({ email, isAdmin }: HeaderProps) {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-kv-gray-200 bg-white px-6">
       <div className="flex items-center gap-6">
-        <Link href="/dashboard" className="flex items-center gap-2">
+        <Link href="/offers" className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-kv-red">
             <span className="text-sm font-bold text-white">KV</span>
           </div>
@@ -49,7 +49,7 @@ export function Header({ email, isAdmin }: HeaderProps) {
 
         <nav className="flex items-center gap-1">
           {navItems.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
             return (
               <Link
                 key={item.href}

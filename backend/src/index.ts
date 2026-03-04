@@ -8,6 +8,7 @@ import { agentRoutes } from "./routes/agent.js";
 import { exportRouter } from "./routes/export.js";
 import { pricelistRouter } from "./routes/pricelist.js";
 import { profileRouter } from "./routes/profile.js";
+import { offersRouter } from "./routes/offers.js";
 
 const app = new Hono();
 
@@ -30,6 +31,7 @@ app.route("/", agentRoutes);
 app.route("/", exportRouter);
 app.route("/", pricelistRouter);
 app.route("/", profileRouter);
+app.route("/", offersRouter);
 
 app.get("/", (c) =>
   c.json({ name: "KV Offer Manager API", version: "0.1.0" }),

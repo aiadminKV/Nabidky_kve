@@ -6,6 +6,7 @@ export type OfferPhase = "idle" | "parsing" | "parsed" | "processing" | "review"
 
 /** A product from the catalog */
 export interface Product {
+  id?: string;
   sku: string;
   name: string;
   manufacturer_code: string | null;

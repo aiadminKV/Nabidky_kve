@@ -32,6 +32,7 @@ export async function searchProductsFulltext(
   maxResults = 20,
   client?: SupabaseClient,
   manufacturer?: string,
+  category?: string,
 ): Promise<ProductResult[]> {
   const supabase = client ?? getAdminClient();
 
@@ -40,6 +41,7 @@ export async function searchProductsFulltext(
     max_results: maxResults,
   };
   if (manufacturer) rpcParams.manufacturer_filter = manufacturer;
+  if (category) rpcParams.category_filter = category;
 
   const { data, error } = await supabase.rpc("search_products_fulltext", rpcParams);
 
@@ -48,6 +50,38 @@ export async function searchProductsFulltext(
   }
 
   return (data ?? []) as ProductResult[];
+}
+
+export interface CategoryInfo {
+  category: string;
+  subcategories: { name: string; cnt: number }[];
+  manufacturers: { name: string; cnt: number }[];
+}
+
+export interface TopCategory {
+  name: string;
+  cnt: number;
+}
+
+/**
+ * Get category info: top-level categories (no arg) or subcategories + manufacturers for a specific category.
+ */
+export async function getCategoryInfo(
+  category?: string,
+  client?: SupabaseClient,
+): Promise<CategoryInfo | TopCategory[]> {
+  const supabase = client ?? getAdminClient();
+
+  const rpcParams: Record<string, unknown> = {};
+  if (category) rpcParams.target_category = category;
+
+  const { data, error } = await supabase.rpc("get_category_info", rpcParams);
+
+  if (error) {
+    throw new Error(`Category info failed: ${error.message}`);
+  }
+
+  return data as CategoryInfo | TopCategory[];
 }
 
 /**

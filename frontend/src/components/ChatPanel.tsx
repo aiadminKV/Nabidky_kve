@@ -6,6 +6,7 @@ import type { ChatMessage, ToolCallStatus } from "@/lib/types";
 const TOOL_ICONS: Record<string, string> = {
   search_products: "🔍",
   semantic_search: "🧠",
+  get_category_info: "📂",
   add_item_to_offer: "➕",
   replace_product_in_offer: "🔄",
   remove_item_from_offer: "🗑",

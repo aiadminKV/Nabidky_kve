@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Header } from "@/components/Header";
 import { ChatPanel } from "@/components/ChatPanel";
 import { AgentDebugPanel } from "@/components/AgentDebugPanel";
@@ -9,7 +10,11 @@ import { ParsedItemsTable } from "@/components/ParsedItemsTable";
 import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { createClient } from "@/lib/supabase/client";
-import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx } from "@/lib/api";
+import {
+  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx,
+  getOffer, saveOfferMessages, saveOfferItems,
+  type ChatMessageDTO, type SaveOfferItemInput,
+} from "@/lib/api";
 import type {
   ChatMessage,
   DebugEntry,
@@ -22,12 +27,15 @@ import type {
   ToolCallStatus,
 } from "@/lib/types";
 
-interface DashboardClientProps {
+interface OfferDetailClientProps {
+  offerId: string;
   email: string;
   isAdmin?: boolean;
 }
 
-export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
+export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClientProps) {
+  const router = useRouter();
+  const [offerTitle, setOfferTitle] = useState("");
   const [phase, setPhase] = useState<OfferPhase>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [parsedItems, setParsedItems] = useState<ParsedItem[]>([]);
@@ -40,8 +48,12 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [showDebug, setShowDebug] = useState(false);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
+  const [loadingOffer, setLoadingOffer] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveItemsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flashPosition = useCallback((pos: number) => {
     setChangedPositions((prev) => new Set(prev).add(pos));
@@ -60,7 +72,6 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     );
   }, []);
 
-  // Stable singleton client – avoid creating a new instance on every getToken() call
   const supabase = useMemo(() => createClient(), []);
 
   const getToken = useCallback(async () => {
@@ -69,10 +80,129 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       if (error) throw error;
       return data.session?.access_token ?? "";
     } catch {
-      // Token refresh failed – return empty string; individual API calls will handle the 401
       return "";
     }
   }, [supabase]);
+
+  // ──────────────────────────────────────────────────────────
+  // Load offer from DB on mount
+  // ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const token = await getToken();
+        const { offer, items } = await getOffer(offerId, token);
+
+        if (cancelled) return;
+
+        setOfferTitle(offer.title);
+
+        if (offer.messages && offer.messages.length > 0) {
+          const restored: ChatMessage[] = offer.messages.map((m: ChatMessageDTO) => ({
+            id: m.id,
+            role: m.role,
+            text: m.text,
+            timestamp: new Date(m.timestamp),
+          }));
+          setMessages(restored);
+          const maxId = restored.reduce((max, m) => {
+            const num = parseInt(m.id.replace("msg_", ""), 10);
+            return isNaN(num) ? max : Math.max(max, num);
+          }, 0);
+          idCounter.current = maxId;
+        }
+
+        if (items && items.length > 0) {
+          const restored: OfferItem[] = items.map((item) => ({
+            position: item.position,
+            originalName: item.originalName,
+            unit: item.unit,
+            quantity: item.quantity,
+            matchType: (item.matchType as OfferItem["matchType"]) ?? "not_found",
+            confidence: item.confidence ?? 0,
+            product: item.product,
+            candidates: item.candidates ?? [],
+            confirmed: item.confirmed,
+            extraColumns: item.extraColumns && Object.keys(item.extraColumns).length > 0
+              ? item.extraColumns
+              : undefined,
+          }));
+          setOfferItems(restored);
+          setPhase("review");
+        }
+      } catch {
+        if (!cancelled) setLoadError("Nabídku se nepodařilo načíst.");
+      } finally {
+        if (!cancelled) setLoadingOffer(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [offerId, getToken]);
+
+  // ──────────────────────────────────────────────────────────
+  // Auto-save messages (debounced)
+  // ──────────────────────────────────────────────────────────
+
+  const persistMessages = useCallback(async (msgs: ChatMessage[]) => {
+    try {
+      const token = await getToken();
+      const dtos: ChatMessageDTO[] = msgs
+        .filter((m) => !m.isStreaming)
+        .map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          timestamp: m.timestamp.toISOString(),
+        }));
+      await saveOfferMessages(offerId, dtos, token);
+    } catch {
+      // silent
+    }
+  }, [offerId, getToken]);
+
+  const debouncedSaveMessages = useCallback((msgs: ChatMessage[]) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      persistMessages(msgs);
+    }, 1500);
+  }, [persistMessages]);
+
+  // ──────────────────────────────────────────────────────────
+  // Auto-save offer items (debounced)
+  // ──────────────────────────────────────────────────────────
+
+  const persistItems = useCallback(async (items: OfferItem[]) => {
+    try {
+      const token = await getToken();
+      const dtos: SaveOfferItemInput[] = items.map((i) => ({
+        position: i.position,
+        originalName: i.originalName,
+        unit: i.unit,
+        quantity: i.quantity,
+        matchType: i.matchType,
+        confidence: i.confidence,
+        productId: i.product?.id ?? null,
+        confirmed: i.confirmed,
+        candidates: i.candidates ?? [],
+        extraColumns: i.extraColumns,
+      }));
+      await saveOfferItems(offerId, dtos, token);
+    } catch {
+      // silent
+    }
+  }, [offerId, getToken]);
+
+  const debouncedSaveItems = useCallback((items: OfferItem[]) => {
+    if (saveItemsTimerRef.current) clearTimeout(saveItemsTimerRef.current);
+    saveItemsTimerRef.current = setTimeout(() => {
+      persistItems(items);
+    }, 2000);
+  }, [persistItems]);
 
   const addMessage = useCallback((role: ChatMessage["role"], text: string) => {
     const msg: ChatMessage = {
@@ -81,9 +211,13 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       text,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, msg]);
+    setMessages((prev) => {
+      const next = [...prev, msg];
+      debouncedSaveMessages(next);
+      return next;
+    });
     return msg;
-  }, []);
+  }, [debouncedSaveMessages]);
 
   const TOOL_LABELS: Record<string, string> = useMemo(() => ({
     search_products: "Hledání produktů",
@@ -96,7 +230,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }), []);
 
   // ──────────────────────────────────────────────────────────
-  // TSV parsing utilities
+  // TSV parsing utilities (same as DashboardClient)
   // ──────────────────────────────────────────────────────────
 
   const detectHeader = useCallback((firstRow: string[]): string[] | null => {
@@ -308,7 +442,9 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
               product,
               candidates: [],
             };
-            return [...prev, newItem];
+            const next = [...prev, newItem];
+            debouncedSaveItems(next);
+            return next;
           });
           if (phase === "idle" || phase === "parsed") {
             setPhase("review");
@@ -318,8 +454,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         case "replace_product": {
           const product = action.product ?? null;
           flashPosition(action.position);
-          setOfferItems((prev) =>
-            prev.map((i) =>
+          setOfferItems((prev) => {
+            const next = prev.map((i) =>
               i.position === action.position
                 ? {
                     ...i,
@@ -328,20 +464,24 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
                     confidence: product ? 100 : i.confidence,
                   }
                 : i,
-            ),
-          );
+            );
+            debouncedSaveItems(next);
+            return next;
+          });
           break;
         }
         case "remove_item": {
           setOfferItems((prev) => {
             const filtered = prev.filter((i) => i.position !== action.position);
-            return filtered.map((item, idx) => ({ ...item, position: idx }));
+            const next = filtered.map((item, idx) => ({ ...item, position: idx }));
+            debouncedSaveItems(next);
+            return next;
           });
           break;
         }
       }
     },
-    [phase, flashPosition],
+    [phase, flashPosition, debouncedSaveItems],
   );
 
   // ──────────────────────────────────────────────────────────
@@ -379,11 +519,13 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
               ),
             );
           } else if (event.type === "text_done") {
-            setMessages((prev) =>
-              prev.map((m) =>
+            setMessages((prev) => {
+              const next = prev.map((m) =>
                 m.id === streamingMsgId ? { ...m, isStreaming: false } : m,
-              ),
-            );
+              );
+              debouncedSaveMessages(next);
+              return next;
+            });
           } else if (event.type === "tool_activity") {
             const { tool, status } = event.data as { tool: string; status: "start" | "end" };
             if (status === "start") {
@@ -424,19 +566,19 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         addMessage("system", `Chyba: ${msg}`);
       } finally {
         setIsParsingChat(false);
-        setMessages((prev) =>
-          prev.map((m) =>
+        setMessages((prev) => {
+          let next = prev.map((m) =>
             m.id === streamingMsgId && m.isStreaming
               ? { ...m, isStreaming: false, toolCalls: (m.toolCalls ?? []).map((tc) => ({ ...tc, status: "done" as const })) }
               : m,
-          ),
-        );
-        setMessages((prev) =>
-          prev.filter((m) => !(m.id === streamingMsgId && !m.text.trim() && !(m.toolCalls?.length))),
-        );
+          );
+          next = next.filter((m) => !(m.id === streamingMsgId && !m.text.trim() && !(m.toolCalls?.length)));
+          debouncedSaveMessages(next);
+          return next;
+        });
       }
     },
-    [addMessage, getToken, buildOfferSummary, processAction, TOOL_LABELS],
+    [addMessage, getToken, buildOfferSummary, processAction, TOOL_LABELS, debouncedSaveMessages],
   );
 
   // ──────────────────────────────────────────────────────────
@@ -465,7 +607,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           ? { extraColumns: item.extraColumns }
           : {}),
       }));
-      setOfferItems((prev) => [...prev, ...newOfferItems]);
+      setOfferItems((prev) => {
+        const next = [...prev, ...newOfferItems];
+        debouncedSaveItems(next);
+        return next;
+      });
       addMessage("system", `Přidáno ${items.length} položek do nabídky.`);
     } else {
       setParsedItems(items);
@@ -473,7 +619,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       addMessage("system", `Rozpoznáno ${items.length} položek z tabulky. Zkontrolujte a klikněte Zpracovat.`);
     }
     setPendingPaste(null);
-  }, [pendingPaste, parseTSVLocally, phase, offerItems, addMessage]);
+  }, [pendingPaste, parseTSVLocally, phase, offerItems, addMessage, debouncedSaveItems]);
 
   const handlePasteSendAsMessage = useCallback(() => {
     if (!pendingPaste) return;
@@ -487,7 +633,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }, []);
 
   // ──────────────────────────────────────────────────────────
-  // Handler: user clicks "Zpracovat" → search phase
+  // Handler: user clicks "Zpracovat" -> search phase
   // ──────────────────────────────────────────────────────────
 
   const handleProcess = useCallback(async () => {
@@ -532,13 +678,15 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             return next;
           });
           flashPosition(data.position);
-          setOfferItems((prev) =>
-            prev.map((item) =>
+          setOfferItems((prev) => {
+            const next = prev.map((item) =>
               item.position === data.position
                 ? { ...item, ...data, extraColumns: item.extraColumns }
                 : item,
-            ),
-          );
+            );
+            debouncedSaveItems(next);
+            return next;
+          });
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           setPhase("review");
@@ -554,10 +702,10 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       setSearchingSet(new Set());
       if (phase === "processing") setPhase("review");
     }
-  }, [parsedItems, addMessage, getToken, phase]);
+  }, [parsedItems, addMessage, getToken, phase, flashPosition, debouncedSaveItems]);
 
   // ──────────────────────────────────────────────────────────
-  // Handler: user clicks "Zpracovat nenalezené" → semantic search
+  // Handler: user clicks "Zpracovat nenalezené" -> semantic search
   // ──────────────────────────────────────────────────────────
 
   const handleProcessNotFound = useCallback(async () => {
@@ -590,13 +738,15 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             next.delete(data.position);
             return next;
           });
-          setOfferItems((prev) =>
-            prev.map((item) =>
+          setOfferItems((prev) => {
+            const next = prev.map((item) =>
               item.position === data.position
                 ? { ...item, ...data, extraColumns: item.extraColumns }
                 : item,
-            ),
-          );
+            );
+            debouncedSaveItems(next);
+            return next;
+          });
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           addMessage("system", "Sémantické vyhledávání dokončeno.");
@@ -611,7 +761,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       setSearchingSet(new Set());
       setIsSearchingSemantic(false);
     }
-  }, [offerItems, addMessage, getToken]);
+  }, [offerItems, addMessage, getToken, debouncedSaveItems]);
 
   // ──────────────────────────────────────────────────────────
   // Review handlers
@@ -622,24 +772,28 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }, []);
 
   const handleConfirm = useCallback((item: OfferItem, selectedProduct: Product | null) => {
-    setOfferItems((prev) =>
-      prev.map((i) =>
+    setOfferItems((prev) => {
+      const next = prev.map((i) =>
         i.position === item.position
           ? { ...i, product: selectedProduct, confirmed: true, matchType: "match" as const, confidence: 100 }
           : i,
-      ),
-    );
+      );
+      debouncedSaveItems(next);
+      return next;
+    });
     setReviewItem(null);
-  }, []);
+  }, [debouncedSaveItems]);
 
   const handleSkip = useCallback((item: OfferItem) => {
-    setOfferItems((prev) =>
-      prev.map((i) =>
+    setOfferItems((prev) => {
+      const next = prev.map((i) =>
         i.position === item.position ? { ...i, confirmed: true } : i,
-      ),
-    );
+      );
+      debouncedSaveItems(next);
+      return next;
+    });
     setReviewItem(null);
-  }, []);
+  }, [debouncedSaveItems]);
 
   const handleManualSearch = useCallback(
     async (query: string): Promise<Product[]> => {
@@ -682,7 +836,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     }
   }, [offerItems, getToken, addMessage]);
 
-  const handleReset = useCallback(() => {
+  const handleReset = useCallback(async () => {
     setPhase("idle");
     setParsedItems([]);
     setOfferItems([]);
@@ -690,7 +844,15 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setReviewItem(null);
     setMessages([]);
     setDebugLog([]);
-  }, []);
+
+    try {
+      const token = await getToken();
+      await saveOfferMessages(offerId, [], token);
+      await saveOfferItems(offerId, [], token);
+    } catch {
+      // silent
+    }
+  }, [offerId, getToken]);
 
   const handleClearDebug = useCallback(() => {
     setDebugLog([]);
@@ -702,6 +864,46 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     },
     [addMessage],
   );
+
+  // ──────────────────────────────────────────────────────────
+  // Loading / error states
+  // ──────────────────────────────────────────────────────────
+
+  if (loadingOffer) {
+    return (
+      <div className="flex h-screen flex-col bg-kv-gray-50">
+        <Header email={email} isAdmin={isAdmin} />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="flex items-center gap-3 text-kv-gray-400">
+            <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span className="text-sm">Načítám nabídku…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-screen flex-col bg-kv-gray-50">
+        <Header email={email} isAdmin={isAdmin} />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center">
+            <p className="text-sm text-red-500">{loadError}</p>
+            <button
+              onClick={() => router.push("/offers")}
+              className="mt-4 rounded-xl bg-kv-red px-5 py-2.5 text-sm font-medium text-white"
+            >
+              Zpět na nabídky
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ──────────────────────────────────────────────────────────
   // Right panel content depends on the phase
@@ -759,6 +961,21 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   return (
     <div className="flex h-screen flex-col bg-kv-gray-50">
       <Header email={email} isAdmin={isAdmin} />
+
+      {/* Offer title bar */}
+      <div className="flex h-10 shrink-0 items-center border-b border-kv-gray-200 bg-white px-4">
+        <button
+          onClick={() => router.push("/offers")}
+          className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-kv-gray-400 transition-colors hover:bg-kv-gray-50 hover:text-kv-gray-600"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+          </svg>
+          Nabídky
+        </button>
+        <span className="mx-2 text-kv-gray-200">/</span>
+        <span className="text-xs font-medium text-kv-dark truncate">{offerTitle}</span>
+      </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel – Chat/Input */}
