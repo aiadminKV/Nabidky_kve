@@ -39,7 +39,26 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [showDebug, setShowDebug] = useState(false);
+  const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const idCounter = useRef(0);
+  const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
+  const flashPosition = useCallback((pos: number) => {
+    setChangedPositions((prev) => new Set(prev).add(pos));
+    const existing = changedTimers.current.get(pos);
+    if (existing) clearTimeout(existing);
+    changedTimers.current.set(
+      pos,
+      setTimeout(() => {
+        setChangedPositions((prev) => {
+          const next = new Set(prev);
+          next.delete(pos);
+          return next;
+        });
+        changedTimers.current.delete(pos);
+      }, 2000),
+    );
+  }, []);
 
   // Stable singleton client – avoid creating a new instance on every getToken() call
   const supabase = useMemo(() => createClient(), []);
@@ -276,8 +295,10 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           const product = action.product ?? null;
           setOfferItems((prev) => {
             const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
+            const newPos = maxPos + 1;
+            flashPosition(newPos);
             const newItem: OfferItem = {
-              position: maxPos + 1,
+              position: newPos,
               originalName: action.name,
               unit: product?.unit ?? null,
               quantity: action.quantity,
@@ -295,6 +316,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         }
         case "replace_product": {
           const product = action.product ?? null;
+          flashPosition(action.position);
           setOfferItems((prev) =>
             prev.map((i) =>
               i.position === action.position
@@ -318,7 +340,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         }
       }
     },
-    [phase],
+    [phase, flashPosition],
   );
 
   // ──────────────────────────────────────────────────────────
@@ -488,6 +510,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         : {}),
     }));
     setOfferItems(emptyOfferItems);
+    setSearchingSet(new Set(validItems.map((_, i) => i)));
 
     try {
       const token = await getToken();
@@ -507,6 +530,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             next.delete(data.position);
             return next;
           });
+          flashPosition(data.position);
           setOfferItems((prev) =>
             prev.map((item) =>
               item.position === data.position
@@ -720,6 +744,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           <ResultsTable
             items={offerItems}
             searchingSet={searchingSet}
+            changedPositions={changedPositions}
             onItemClick={handleItemClick}
             onExport={handleExport}
             onReset={handleReset}

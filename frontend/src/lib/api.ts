@@ -1,7 +1,10 @@
 import type { SSEEvent, Product, PricelistUpload, OfferItemSummary } from "./types";
 
-/** All calls go through Next.js rewrites → /api/:path* → backend */
+/** REST calls go through Next.js rewrites → /api/:path* → backend */
 const API_URL = "/api";
+
+/** SSE streams connect directly to the backend (Next.js proxy buffers SSE) */
+const STREAM_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 /**
  * Stream SSE events directly from the backend (bypasses Next.js proxy).
@@ -11,7 +14,7 @@ async function* streamSSE(
   body: Record<string, unknown>,
   token: string,
 ): AsyncGenerator<SSEEvent> {
-  const res = await fetch(`${API_URL}${endpoint}`, {
+  const res = await fetch(`${STREAM_URL}${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -14,7 +14,7 @@ const searchTool = tool({
   description: SEARCH_TOOL_DESCRIPTION,
   parameters: z.object({
     query: z.string().describe("Search query – short, focused keywords"),
-    max_results: z.number().optional().default(10).describe("Max results (default 10)"),
+    max_results: z.number().default(10).describe("Max results (default 10)"),
   }),
   async execute({ query, max_results }) {
     const results = await searchProductsFulltext(query, max_results);
@@ -111,8 +111,8 @@ const semanticSearchTool = tool({
   description: SEMANTIC_TOOL_DESCRIPTION,
   parameters: z.object({
     query: z.string().describe("Natural language description of the product or its function"),
-    max_results: z.number().optional().default(10).describe("Max results (default 10)"),
-    threshold: z.number().optional().default(0.45).describe("Minimum similarity score 0-1 (default 0.45)"),
+    max_results: z.number().default(10).describe("Max results (default 10)"),
+    threshold: z.number().default(0.45).describe("Minimum similarity score 0-1 (default 0.45)"),
   }),
   async execute({ query, max_results, threshold }) {
     const embedding = await generateQueryEmbedding(query);

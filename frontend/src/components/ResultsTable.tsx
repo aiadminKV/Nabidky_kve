@@ -8,6 +8,7 @@ import { ProductInfoPopover } from "./ProductInfoPopover";
 interface ResultsTableProps {
   items: OfferItem[];
   searchingSet: Set<number>;
+  changedPositions?: Set<number>;
   onItemClick: (item: OfferItem) => void;
   onExport: () => void;
   onReset: () => void;
@@ -18,6 +19,7 @@ interface ResultsTableProps {
 export function ResultsTable({
   items,
   searchingSet,
+  changedPositions,
   onItemClick,
   onExport,
   onReset,
@@ -133,14 +135,17 @@ export function ResultsTable({
           <tbody className="divide-y divide-kv-gray-100">
             {items.map((item) => {
               const isCurrentlySearching = searchingSet.has(item.position);
+              const justChanged = changedPositions?.has(item.position) ?? false;
               return (
                 <tr
                   key={item.position}
                   onClick={() => !isCurrentlySearching && onItemClick(item)}
-                  className={`transition-colors ${
+                  className={`transition-all duration-500 ${
                     isCurrentlySearching
                       ? "bg-kv-gray-50 animate-pulse-subtle"
-                      : "cursor-pointer hover:bg-kv-gray-50"
+                      : justChanged
+                        ? "bg-green-50 ring-1 ring-inset ring-green-200"
+                        : "cursor-pointer hover:bg-kv-gray-50"
                   }`}
                 >
                   <td className="px-4 py-3 text-xs text-kv-gray-400">{item.position + 1}</td>
