@@ -2,12 +2,19 @@ import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { getAdminClient } from "../services/supabase.js";
 
-const profileRouter = new Hono();
+type Env = {
+  Variables: {
+    user: { id: string; email?: string; app_metadata?: Record<string, unknown> };
+    accessToken: string;
+  };
+};
+
+const profileRouter = new Hono<Env>();
 
 profileRouter.use("*", authMiddleware);
 
 profileRouter.get("/profile", async (c) => {
-  const user = c.get("user") as { id: string; email?: string; app_metadata?: Record<string, unknown> };
+  const user = c.get("user");
   const supabase = getAdminClient();
 
   const { data, error } = await supabase
@@ -31,7 +38,7 @@ profileRouter.get("/profile", async (c) => {
 });
 
 profileRouter.put("/profile", async (c) => {
-  const user = c.get("user") as { id: string };
+  const user = c.get("user");
   const body = await c.req.json<{
     first_name?: string;
     last_name?: string;

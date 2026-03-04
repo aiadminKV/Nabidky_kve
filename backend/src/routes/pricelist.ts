@@ -3,6 +3,7 @@ import { streamText } from "hono/streaming";
 import { randomUUID } from "node:crypto";
 import { authMiddleware, adminMiddleware } from "../middleware/auth.js";
 import { getAdminClient } from "../services/supabase.js";
+import { generateEmbeddingsForProducts } from "../services/embedding.js";
 import {
   parseExcelBuffer,
   parseCsvBuffer,
