@@ -1,10 +1,10 @@
 FROM node:20-slim AS builder
 
 WORKDIR /app
-COPY package*.json ./
-COPY .npmrc* ./
+COPY backend/package*.json ./
+COPY backend/.npmrc* ./
 RUN npm ci
-COPY . .
+COPY backend/ .
 RUN npm run build
 
 FROM node:20-slim
