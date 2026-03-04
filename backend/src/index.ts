@@ -15,7 +15,10 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: env.FRONTEND_URL,
+    origin: (origin) => {
+      const allowed = [env.FRONTEND_URL, "http://localhost:3000"];
+      return allowed.includes(origin) ? origin : env.FRONTEND_URL;
+    },
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,

@@ -1,7 +1,7 @@
 import type { SSEEvent, Product, PricelistUpload, OfferItemSummary } from "./types";
 
-/** All calls (REST + SSE) go through Next.js rewrites → /api/:path* → backend */
-const API_URL = "/api";
+/** Backend URL — direct from browser, no proxy */
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 /**
  * Stream SSE events directly from the backend (bypasses Next.js proxy).
@@ -11,7 +11,7 @@ async function* streamSSE(
   body: Record<string, unknown>,
   token: string,
 ): AsyncGenerator<SSEEvent> {
-  const res = await fetch(`${API_URL}${endpoint}`, {
+  const res = await fetch(`${BACKEND_URL}${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -92,7 +92,7 @@ export async function searchProducts(
   query: string,
   token: string,
 ): Promise<Product[]> {
-  const res = await fetch(`${API_URL}/agent/product-search`, {
+  const res = await fetch(`${BACKEND_URL}/agent/product-search`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -110,7 +110,7 @@ export async function downloadXlsx(
   items: Array<Record<string, unknown>>,
   token: string,
 ): Promise<Blob> {
-  const res = await fetch(`${API_URL}/export/xlsx`, {
+  const res = await fetch(`${BACKEND_URL}/export/xlsx`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -130,7 +130,7 @@ export async function uploadPricelist(
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${API_URL}/pricelist/upload`, {
+  const res = await fetch(`${BACKEND_URL}/pricelist/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -149,7 +149,7 @@ export async function previewColumns(
   uploadId: string,
   token: string,
 ): Promise<ColumnPreviewResponse> {
-  const res = await fetch(`${API_URL}/pricelist/preview-columns`, {
+  const res = await fetch(`${BACKEND_URL}/pricelist/preview-columns`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -192,7 +192,7 @@ export function applyPricelist(uploadId: string, token: string) {
 export async function getPricelistHistory(
   token: string,
 ): Promise<PricelistUpload[]> {
-  const res = await fetch(`${API_URL}/pricelist/history`, {
+  const res = await fetch(`${BACKEND_URL}/pricelist/history`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return [];
@@ -211,7 +211,7 @@ export async function getProductsPreview(
   if (params.search) qs.set("search", params.search);
   if (params.category) qs.set("category", params.category);
 
-  const res = await fetch(`${API_URL}/pricelist/products?${qs}`, {
+  const res = await fetch(`${BACKEND_URL}/pricelist/products?${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
@@ -223,7 +223,7 @@ export async function getProductsPreview(
 export async function getPricelistStats(
   token: string,
 ): Promise<PricelistStats> {
-  const res = await fetch(`${API_URL}/pricelist/stats`, {
+  const res = await fetch(`${BACKEND_URL}/pricelist/stats`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
@@ -270,7 +270,7 @@ export interface UserProfile {
 
 /** Fetch the current user's profile (REST) */
 export async function getProfile(token: string): Promise<UserProfile> {
-  const res = await fetch(`${API_URL}/profile`, {
+  const res = await fetch(`${BACKEND_URL}/profile`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed to load profile");
@@ -282,7 +282,7 @@ export async function updateProfile(
   data: { first_name?: string; last_name?: string; phone?: string },
   token: string,
 ): Promise<UserProfile> {
-  const res = await fetch(`${API_URL}/profile`, {
+  const res = await fetch(`${BACKEND_URL}/profile`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
