@@ -448,7 +448,7 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
         }
       });
 
-      const result = await run(offerAgent, prompt, { stream: true });
+      const result = await run(offerAgent, prompt, { stream: true, maxTurns: Infinity });
 
       for await (const event of result) {
         if (event.type === "raw_model_stream_event") {

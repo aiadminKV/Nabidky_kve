@@ -1,10 +1,8 @@
 /**
- * Import 256-dim embeddings via PostgreSQL COPY protocol.
+ * Import 256-dim embeddings via Supabase REST API (PostgREST).
  *
- * 1. Creates staging table _emb_staging
- * 2. Streams data via COPY (fastest bulk insert)
- * 3. Single UPDATE join into products
- * 4. Drops staging table
+ * INSERTs into a clean `product_embeddings` table using parallel HTTP requests.
+ * Much faster than pg COPY/UPDATE because PostgREST batch insert into empty table is optimized.
  *
  * Usage:  cd backend && npx tsx ../scripts/embed-csv-import.ts
  */
@@ -16,24 +14,24 @@ import { createRequire } from "node:module";
 const require = createRequire(
   resolve(import.meta.dirname, "../backend/package.json"),
 );
-const pg = require("pg") as typeof import("pg");
-const { from: copyFrom } =
-  require("pg-copy-streams") as typeof import("pg-copy-streams");
+const { createClient } = require("@supabase/supabase-js");
 
 import fs from "node:fs";
 import readline from "node:readline";
-import { Readable } from "node:stream";
 
 const INPUT_FILE = resolve(import.meta.dirname, "../embeddings-256.jsonl");
+const BATCH_SIZE = 100;
+const CONCURRENCY = 8;
 
 function fmt(n: number) {
   return n.toLocaleString("cs-CZ");
 }
 
 async function main() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) {
-    console.error("❌  SUPABASE_DB_URL not set in .env");
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    console.error("❌  SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set");
     process.exit(1);
   }
   if (!fs.existsSync(INPUT_FILE)) {
@@ -41,168 +39,119 @@ async function main() {
     process.exit(1);
   }
 
-  const stats = fs.statSync(INPUT_FILE);
-  console.log(`\n📥 embed-csv-import (COPY protocol)`);
-  console.log(
-    `   Input: ${INPUT_FILE} (${(stats.size / 1024 / 1024).toFixed(1)} MB)`,
-  );
+  const supabase = createClient(url, key, {
+    auth: { persistSession: false },
+  });
 
-  // --- Count records ---
-  console.log("   Counting records...");
+  const stats = fs.statSync(INPUT_FILE);
+  console.log(`\n📥 embed-import (REST API, batch=${BATCH_SIZE}, concurrency=${CONCURRENCY})`);
+  console.log(`   Input: ${(stats.size / 1024 / 1024).toFixed(0)} MB\n`);
+
+  // Count lines
+  console.log("   Counting...");
   let totalLines = 0;
   {
-    const counter = readline.createInterface({
+    const c = readline.createInterface({
       input: fs.createReadStream(INPUT_FILE),
       crlfDelay: Infinity,
     });
-    for await (const line of counter) {
-      if (line.trim()) totalLines++;
+    for await (const l of c) {
+      if (l.trim()) totalLines++;
     }
   }
   console.log(`   Records: ${fmt(totalLines)}\n`);
 
-  // --- Connect ---
-  console.log("🔌 Connecting to database...");
-  const client = new pg.Client({
-    connectionString: dbUrl,
-    ssl: { rejectUnauthorized: false },
-    statement_timeout: 0,
-  });
-  await client.connect();
-  console.log("   Connected!\n");
-
-  // No statement timeout for this session
-  await client.query("SET statement_timeout = 0");
-
-  // --- Step 1: Create staging table ---
-  console.log("📦 Step 1/4: Creating staging table...");
-  await client.query("DROP TABLE IF EXISTS _emb_staging");
-  await client.query(
-    "CREATE UNLOGGED TABLE _emb_staging (sku TEXT NOT NULL, emb TEXT NOT NULL)",
-  );
-  console.log("   Done.\n");
-
-  // --- Step 2: COPY data into staging ---
-  console.log("🚀 Step 2/4: Streaming data via COPY...");
-  const copyStream = client.query(
-    copyFrom("COPY _emb_staging (sku, emb) FROM STDIN WITH (FORMAT text)"),
-  );
-
-  let streamed = 0;
-  const startTime = Date.now();
-  let lastLog = Date.now();
-
-  const readable = new Readable({
-    async read() {
-      // We can't use readline here directly, so we'll use a generator approach
-    },
-  });
-
-  // Create a transform: read JSONL → output tab-separated lines for COPY
   const rl = readline.createInterface({
     input: fs.createReadStream(INPUT_FILE),
     crlfDelay: Infinity,
   });
 
-  // We need to pipe data into the COPY stream
-  // Use a promise-based approach
-  const copyPromise = new Promise<void>((resolve, reject) => {
-    copyStream.on("finish", resolve);
-    copyStream.on("error", reject);
-  });
+  let inserted = 0;
+  let errors = 0;
+  const startTime = Date.now();
+  let lastLog = Date.now();
 
-  let backpressure = false;
+  let batch: Array<{ sku: string; embedding: string }> = [];
+  const inflight = new Set<Promise<void>>();
 
-  // Buffer writes for better throughput
-  const WRITE_BUFFER_SIZE = 256;
-  let writeBuf: string[] = [];
-
-  const flushBuf = async () => {
-    if (writeBuf.length === 0) return;
-    const chunk = writeBuf.join("");
-    writeBuf = [];
-    if (!copyStream.write(chunk)) {
-      await new Promise<void>((r) => copyStream.once("drain", r));
-    }
+  const sendBatch = (items: typeof batch): Promise<void> => {
+    return supabase
+      .from("product_embeddings")
+      .insert(items)
+      .then((res: { error: unknown }) => {
+        if (res.error) {
+          const msg =
+            typeof res.error === "object" && res.error !== null
+              ? (res.error as Record<string, unknown>).message || JSON.stringify(res.error)
+              : String(res.error);
+          console.error(`  ❌ Insert error: ${msg}`);
+          errors += items.length;
+        } else {
+          inserted += items.length;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(`  ❌ Fetch error: ${err instanceof Error ? err.message : err}`);
+        errors += items.length;
+      });
   };
 
   for await (const line of rl) {
     if (!line.trim()) continue;
     try {
-      // Fast extraction without full JSON.parse of 256-float array
+      // Fast string extraction (no full JSON.parse of 256-float array)
       const skuStart = line.indexOf('"sku":"') + 7;
       const skuEnd = line.indexOf('"', skuStart);
       const sku = line.substring(skuStart, skuEnd);
 
       const embStart = line.indexOf('"embedding":') + 12;
       const embEnd = line.lastIndexOf("]") + 1;
-      const vecStr = line.substring(embStart, embEnd);
+      const embedding = line.substring(embStart, embEnd);
 
-      writeBuf.push(`${sku}\t${vecStr}\n`);
-      streamed++;
+      batch.push({ sku, embedding });
+    } catch {
+      errors++;
+      continue;
+    }
 
-      if (writeBuf.length >= WRITE_BUFFER_SIZE) {
-        await flushBuf();
+    if (batch.length >= BATCH_SIZE) {
+      // Wait for a slot if at max concurrency
+      if (inflight.size >= CONCURRENCY) {
+        await Promise.race(inflight);
       }
 
-      if (Date.now() - lastLog > 5000) {
+      const items = batch;
+      batch = [];
+      const p = sendBatch(items).finally(() => inflight.delete(p));
+      inflight.add(p);
+
+      // Progress logging
+      if (Date.now() - lastLog > 3000) {
+        const done = inserted + errors;
         const elapsed = (Date.now() - startTime) / 1000;
-        const rate = streamed / elapsed;
-        const pct = ((streamed / totalLines) * 100).toFixed(1);
-        const eta =
-          rate > 0 ? Math.ceil((totalLines - streamed) / rate / 60) : "?";
+        const rate = done / elapsed;
+        const pct = ((done / totalLines) * 100).toFixed(1);
+        const eta = rate > 0 ? Math.ceil((totalLines - done) / rate / 60) : "?";
         console.log(
-          `   [${fmt(streamed)}/${fmt(totalLines)}] ${pct}%  rate=${fmt(Math.round(rate))}/s  ETA=${eta}min`,
+          `  [${fmt(done)}/${fmt(totalLines)}] ${pct}%  ${fmt(Math.round(rate))}/s  ETA=${eta}min  err=${errors}`,
         );
         lastLog = Date.now();
       }
-    } catch {
-      // skip malformed lines
     }
   }
-  await flushBuf();
 
-  copyStream.end();
-  await copyPromise;
+  // Flush remaining
+  if (batch.length > 0) {
+    if (inflight.size >= CONCURRENCY) await Promise.race(inflight);
+    const p = sendBatch(batch).finally(() => inflight.delete(p));
+    inflight.add(p);
+  }
+  await Promise.all(inflight);
 
-  const copyElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(
-    `   ✅ COPY done: ${fmt(streamed)} rows in ${copyElapsed}s\n`,
-  );
-
-  // --- Step 3: UPDATE products from staging ---
-  console.log("🔄 Step 3/4: Updating products (single UPDATE join)...");
-  const updateStart = Date.now();
-  const updateRes = await client.query(`
-    UPDATE products p
-    SET embedding = s.emb::vector
-    FROM _emb_staging s
-    WHERE p.sku = s.sku
-  `);
-  const updateElapsed = ((Date.now() - updateStart) / 1000).toFixed(1);
-  console.log(
-    `   ✅ Updated ${fmt(updateRes.rowCount ?? 0)} rows in ${updateElapsed}s\n`,
-  );
-
-  // --- Step 4: Cleanup ---
-  console.log("🧹 Step 4/4: Dropping staging table...");
-  await client.query("DROP TABLE IF EXISTS _emb_staging");
-  console.log("   Done.\n");
-
-  // --- Verify ---
-  const {
-    rows: [{ total, withemb }],
-  } = await client.query<{ total: string; withemb: string }>(
-    "SELECT COUNT(*) AS total, COUNT(embedding) AS withemb FROM products",
-  );
-  console.log(
-    `📊 Products: ${fmt(parseInt(total))} total, ${fmt(parseInt(withemb))} with embedding`,
-  );
-
-  const totalElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
-  console.log(`\n✅ All done in ${totalElapsed} min`);
-
-  await client.end();
+  const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
+  console.log(`\n✅ Import done in ${elapsed} min`);
+  console.log(`   Inserted: ${fmt(inserted)}`);
+  console.log(`   Errors:   ${errors}`);
 }
 
 main().catch((err) => {
