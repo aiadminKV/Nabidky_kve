@@ -213,7 +213,7 @@ export type AgentEventCallback = (entry: {
   type: "debug" | "action" | "tool_activity";
   tool?: string;
   data: unknown;
-}) => void;
+}) => Promise<void> | void;
 
 const OFFER_AGENT_INSTRUCTIONS = `Jsi autonomní asistent pro správu nabídek v systému KV Elektro – česká B2B distribuce elektroinstalačního materiálu (471 000+ položek).
 
@@ -293,22 +293,30 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     }),
     async execute({ query, max_results, manufacturer }) {
       const mfr = manufacturer ?? undefined;
-      onEvent({ type: "tool_activity", tool: "search_products", data: { status: "start", query, manufacturer: mfr } });
-      onEvent({ type: "debug", tool: "search_products", data: { query, max_results, manufacturer: mfr } });
-      const results = await searchProductsFulltext(query, max_results, undefined, mfr);
-      const mapped = results.map((r) => ({
-        sku: r.sku,
-        name: r.name,
-        manufacturer_code: r.manufacturer_code,
-        manufacturer: r.manufacturer,
-        category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-        unit: r.unit,
-        ean: r.ean,
-        relevance: Math.round((r.rank + r.similarity_score) * 100) / 100,
-      }));
-      onEvent({ type: "debug", tool: "search_products", data: { type: "result", count: mapped.length, top3: mapped.slice(0, 3) } });
-      onEvent({ type: "tool_activity", tool: "search_products", data: { status: "end" } });
-      return JSON.stringify(mapped);
+      await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "start", query, manufacturer: mfr } });
+      await onEvent({ type: "debug", tool: "search_products", data: { query, max_results, manufacturer: mfr } });
+      try {
+        const results = await searchProductsFulltext(query, max_results, undefined, mfr);
+        const mapped = results.map((r) => ({
+          sku: r.sku,
+          name: r.name,
+          manufacturer_code: r.manufacturer_code,
+          manufacturer: r.manufacturer,
+          category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
+          unit: r.unit,
+          ean: r.ean,
+          relevance: Math.round((r.rank + r.similarity_score) * 100) / 100,
+        }));
+        await onEvent({ type: "debug", tool: "search_products", data: { type: "result", count: mapped.length, top3: mapped.slice(0, 3) } });
+        await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "end" } });
+        return JSON.stringify(mapped);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown search error";
+        console.error("[search_products] Error:", msg);
+        await onEvent({ type: "debug", tool: "search_products", data: { type: "error", error: msg } });
+        await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "end" } });
+        return JSON.stringify({ error: msg, results: [] });
+      }
     },
   });
 
@@ -325,23 +333,31 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     }),
     async execute({ query, max_results, threshold, manufacturer }) {
       const mfr = manufacturer ?? undefined;
-      onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "start", query, manufacturer: mfr } });
-      onEvent({ type: "debug", tool: "semantic_search", data: { query, max_results, threshold, manufacturer: mfr } });
-      const embedding = await generateQueryEmbedding(query);
-      const results = await searchProductsSemantic(embedding, max_results, threshold, undefined, mfr);
-      const mapped = results.map((r) => ({
-        sku: r.sku,
-        name: r.name,
-        manufacturer_code: r.manufacturer_code,
-        manufacturer: r.manufacturer,
-        category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-        unit: r.unit,
-        ean: r.ean,
-        similarity: Math.round(r.cosine_similarity * 100) / 100,
-      }));
-      onEvent({ type: "debug", tool: "semantic_search", data: { type: "result", count: mapped.length, top3: mapped.slice(0, 3) } });
-      onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "end" } });
-      return JSON.stringify(mapped);
+      await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "start", query, manufacturer: mfr } });
+      await onEvent({ type: "debug", tool: "semantic_search", data: { query, max_results, threshold, manufacturer: mfr } });
+      try {
+        const embedding = await generateQueryEmbedding(query);
+        const results = await searchProductsSemantic(embedding, max_results, threshold, undefined, mfr);
+        const mapped = results.map((r) => ({
+          sku: r.sku,
+          name: r.name,
+          manufacturer_code: r.manufacturer_code,
+          manufacturer: r.manufacturer,
+          category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
+          unit: r.unit,
+          ean: r.ean,
+          similarity: Math.round(r.cosine_similarity * 100) / 100,
+        }));
+        await onEvent({ type: "debug", tool: "semantic_search", data: { type: "result", count: mapped.length, top3: mapped.slice(0, 3) } });
+        await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "end" } });
+        return JSON.stringify(mapped);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown search error";
+        console.error("[semantic_search] Error:", msg);
+        await onEvent({ type: "debug", tool: "semantic_search", data: { type: "error", error: msg } });
+        await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "end" } });
+        return JSON.stringify({ error: msg, results: [] });
+      }
     },
   });
 
@@ -358,20 +374,27 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       selectedSku: z.string().nullable().describe("SKU from search_products result, or null if not found"),
     }),
     async execute({ name, quantity, selectedSku }) {
-      onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "start", name } });
-      let product = null;
-      if (selectedSku) {
-        const products = await fetchProductsBySkus([selectedSku]);
-        product = products[0] ?? null;
+      await onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "start", name } });
+      try {
+        let product = null;
+        if (selectedSku) {
+          const products = await fetchProductsBySkus([selectedSku]);
+          product = products[0] ?? null;
+        }
+        await onEvent({
+          type: "action",
+          data: { type: "add_item", name, quantity, selectedSku, product },
+        });
+        await onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "end" } });
+        return product
+          ? `Položka "${product.name}" (SKU: ${product.sku}) přidána do nabídky.`
+          : `Položka "${name}" přidána bez přiřazeného produktu.`;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        console.error("[add_item_to_offer] Error:", msg);
+        await onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "end" } });
+        return `Chyba při přidávání položky "${name}": ${msg}`;
       }
-      onEvent({
-        type: "action",
-        data: { type: "add_item", name, quantity, selectedSku, product },
-      });
-      onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "end" } });
-      return product
-        ? `Položka "${product.name}" (SKU: ${product.sku}) přidána do nabídky.`
-        : `Položka "${name}" přidána bez přiřazeného produktu.`;
     },
   });
 
@@ -386,18 +409,25 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       reasoning: z.string().describe("Brief reason for the replacement (in Czech)"),
     }),
     async execute({ position, selectedSku, reasoning }) {
-      onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "start" } });
-      let product = null;
-      const products = await fetchProductsBySkus([selectedSku]);
-      product = products[0] ?? null;
-      onEvent({
-        type: "action",
-        data: { type: "replace_product", position, selectedSku, reasoning, product },
-      });
-      onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "end" } });
-      return product
-        ? `Pozice ${position} vyměněna na "${product.name}" (${product.sku}).`
-        : `Produkt se SKU "${selectedSku}" nebyl nalezen v katalogu.`;
+      await onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "start" } });
+      try {
+        let product = null;
+        const products = await fetchProductsBySkus([selectedSku]);
+        product = products[0] ?? null;
+        await onEvent({
+          type: "action",
+          data: { type: "replace_product", position, selectedSku, reasoning, product },
+        });
+        await onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "end" } });
+        return product
+          ? `Pozice ${position} vyměněna na "${product.name}" (${product.sku}).`
+          : `Produkt se SKU "${selectedSku}" nebyl nalezen v katalogu.`;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        console.error("[replace_product_in_offer] Error:", msg);
+        await onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "end" } });
+        return `Chyba při záměně produktu na pozici ${position}: ${msg}`;
+      }
     },
   });
 
@@ -408,12 +438,12 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       position: z.number().describe("Position (0-based index) of the item to remove"),
     }),
     async execute({ position }) {
-      onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "start" } });
-      onEvent({
+      await onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "start" } });
+      await onEvent({
         type: "action",
         data: { type: "remove_item", position },
       });
-      onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "end" } });
+      await onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "end" } });
       return `Položka na pozici ${position} odstraněna z nabídky.`;
     },
   });
@@ -430,12 +460,12 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       })).describe("Extracted items"),
     }),
     async execute({ items }) {
-      onEvent({ type: "tool_activity", tool: "parse_items_from_text", data: { status: "start", count: items.length } });
-      onEvent({
+      await onEvent({ type: "tool_activity", tool: "parse_items_from_text", data: { status: "start", count: items.length } });
+      await onEvent({
         type: "action",
         data: { type: "parse_items", items },
       });
-      onEvent({ type: "tool_activity", tool: "parse_items_from_text", data: { status: "end" } });
+      await onEvent({ type: "tool_activity", tool: "parse_items_from_text", data: { status: "end" } });
       return `Parsováno ${items.length} položek a odesláno ke zpracování.`;
     },
   });
@@ -445,7 +475,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     instructions: OFFER_AGENT_INSTRUCTIONS,
     model: "gpt-5-mini",
     modelSettings: {
-      reasoning: { effort: "minimal" },
+      reasoning: { effort: "low" },
     },
     tools: [
       streamingSearchTool,

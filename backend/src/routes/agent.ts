@@ -437,13 +437,13 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
 
       await safeWrite(sseEvent("debug", { ts: Date.now(), type: "prompt", data: prompt }));
 
-      const offerAgent = createOfferAgentStreaming((entry) => {
+      const offerAgent = createOfferAgentStreaming(async (entry) => {
         if (entry.type === "action") {
-          safeWrite(sseEvent("action", entry.data));
+          await safeWrite(sseEvent("action", entry.data));
         } else if (entry.type === "tool_activity") {
-          safeWrite(sseEvent("tool_activity", { tool: entry.tool, ...(entry.data as object) }));
+          await safeWrite(sseEvent("tool_activity", { tool: entry.tool, ...(entry.data as object) }));
         } else {
-          safeWrite(sseEvent("debug", { ts: Date.now(), ...entry }));
+          await safeWrite(sseEvent("debug", { ts: Date.now(), ...entry }));
         }
       });
 

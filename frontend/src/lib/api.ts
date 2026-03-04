@@ -1,10 +1,7 @@
 import type { SSEEvent, Product, PricelistUpload, OfferItemSummary } from "./types";
 
-/** Proxy URL for regular REST calls */
+/** All calls go through Next.js rewrites → /api/:path* → backend */
 const API_URL = "/api";
-
-/** Direct backend URL for SSE streams (Next.js proxy doesn't handle SSE) */
-const STREAM_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 /**
  * Stream SSE events directly from the backend (bypasses Next.js proxy).
@@ -14,7 +11,7 @@ async function* streamSSE(
   body: Record<string, unknown>,
   token: string,
 ): AsyncGenerator<SSEEvent> {
-  const res = await fetch(`${STREAM_URL}${endpoint}`, {
+  const res = await fetch(`${API_URL}${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -133,7 +130,7 @@ export async function uploadPricelist(
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${STREAM_URL}/pricelist/upload`, {
+  const res = await fetch(`${API_URL}/pricelist/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -152,7 +149,7 @@ export async function previewColumns(
   uploadId: string,
   token: string,
 ): Promise<ColumnPreviewResponse> {
-  const res = await fetch(`${STREAM_URL}/pricelist/preview-columns`, {
+  const res = await fetch(`${API_URL}/pricelist/preview-columns`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
