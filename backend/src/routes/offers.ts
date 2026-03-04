@@ -2,19 +2,21 @@ import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { getAdminClient } from "../services/supabase.js";
 
-const offers = new Hono();
+type Env = {
+  Variables: {
+    user: { id: string; app_metadata?: { role?: string } };
+    accessToken: string;
+  };
+};
 
-interface AuthUser {
-  id: string;
-  app_metadata?: { role?: string };
-}
+const offers = new Hono<Env>();
 
 /**
  * GET /offers
  * List all offers for the authenticated user, ordered by most recent first.
  */
 offers.get("/offers", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const supabase = getAdminClient();
 
   const { data, error } = await supabase
@@ -35,7 +37,7 @@ offers.get("/offers", authMiddleware, async (c) => {
  * Create a new offer with a title.
  */
 offers.post("/offers", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const { title } = await c.req.json<{ title: string }>();
 
   if (!title?.trim()) {
@@ -67,7 +69,7 @@ offers.post("/offers", authMiddleware, async (c) => {
  * Get a single offer with its items and messages.
  */
 offers.get("/offers/:id", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const offerId = c.req.param("id");
   const supabase = getAdminClient();
 
@@ -141,7 +143,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
  * Update offer title and/or status.
  */
 offers.put("/offers/:id", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const offerId = c.req.param("id");
   const body = await c.req.json<{ title?: string; status?: string }>();
 
@@ -171,7 +173,7 @@ offers.put("/offers/:id", authMiddleware, async (c) => {
  * Delete an offer and all its items.
  */
 offers.delete("/offers/:id", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const offerId = c.req.param("id");
   const supabase = getAdminClient();
 
@@ -195,7 +197,7 @@ offers.delete("/offers/:id", authMiddleware, async (c) => {
  * Save chat messages for an offer.
  */
 offers.put("/offers/:id/messages", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const offerId = c.req.param("id");
   const { messages } = await c.req.json<{ messages: unknown[] }>();
 
@@ -222,7 +224,7 @@ offers.put("/offers/:id/messages", authMiddleware, async (c) => {
  * Bulk-save offer items (replaces all items for this offer).
  */
 offers.put("/offers/:id/items", authMiddleware, async (c) => {
-  const user = c.get("user") as AuthUser;
+  const user = c.get("user");
   const offerId = c.req.param("id");
   const { items } = await c.req.json<{ items: OfferItemInput[] }>();
 
