@@ -1,0 +1,22 @@
+{
+  "name": "kv-offer-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KV Elektro AI-powered offer/inquiry management system",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend && npm run build --prefix backend",
+    "build:backend": "npm run build --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "import": "npm run import --prefix scripts",
+    "update-products": "npm run update --prefix scripts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

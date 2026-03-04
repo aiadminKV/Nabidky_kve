@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme {
+  /* KV Elektro brand palette */
+  --color-kv-red: #E30613;
+  --color-kv-red-dark: #C00510;
+  --color-kv-red-light: #FEE2E2;
+  --color-kv-dark: #1A1A2E;
+  --color-kv-navy: #16213E;
+  --color-kv-gray-50: #F8FAFC;
+  --color-kv-gray-100: #F1F5F9;
+  --color-kv-gray-200: #E2E8F0;
+  --color-kv-gray-300: #CBD5E1;
+  --color-kv-gray-400: #94A3B8;
+  --color-kv-gray-500: #64748B;
+  --color-kv-gray-600: #475569;
+  --color-kv-gray-700: #334155;
+  --color-kv-gray-800: #1E293B;
+  --color-kv-gray-900: #0F172A;
+
+  /* Status colors */
+  --color-status-match: #16A34A;
+  --color-status-match-bg: #F0FDF4;
+  --color-status-uncertain: #CA8A04;
+  --color-status-uncertain-bg: #FEFCE8;
+  --color-status-multiple: #2563EB;
+  --color-status-multiple-bg: #EFF6FF;
+  --color-status-alternative: #EA580C;
+  --color-status-alternative-bg: #FFF7ED;
+  --color-status-not-found: #DC2626;
+  --color-status-not-found-bg: #FEF2F2;
+  --color-status-processing: #64748B;
+  --color-status-processing-bg: #F1F5F9;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-kv-gray-300);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-kv-gray-400);
+}
+
+/* Spinner animation */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Pulse animation for processing items */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
