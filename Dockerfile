@@ -2,7 +2,7 @@
 FROM node:20-slim AS backend-builder
 
 WORKDIR /app/backend
-COPY backend/package*.json ./
+COPY backend/.npmrc backend/package*.json ./
 RUN npm ci
 COPY backend/ ./
 RUN npm run build
@@ -30,6 +30,7 @@ WORKDIR /app
 # Backend: compiled JS + production deps
 COPY --from=backend-builder /app/backend/dist ./backend/dist
 COPY --from=backend-builder /app/backend/package*.json ./backend/
+COPY --from=backend-builder /app/backend/.npmrc ./backend/
 RUN cd backend && npm ci --omit=dev
 
 # Frontend: Next.js standalone (includes node_modules)
