@@ -1,232 +1,8 @@
 import { Agent, tool } from "@openai/agents";
 import { z } from "zod";
-import { searchProductsFulltext, searchProductsSemantic, fetchProductsBySkus, getCategoryInfo } from "../search.js";
-import { generateQueryEmbedding } from "../embedding.js";
-
-const SEARCH_TOOL_DESCRIPTION =
-  "Search the KV Elektro product catalog by keywords, product name, manufacturer code, SKU, or EAN. " +
-  "Returns ranked results. Always returns candidates (even approximate). " +
-  "Tips: use short focused queries (3-5 keywords). Avoid long descriptive queries. " +
-  "If searching for abbreviations like B3x16, also try expanded form '3P B16'.";
-
-const searchTool = tool({
-  name: "search_products",
-  description: SEARCH_TOOL_DESCRIPTION +
-    " Use 'category' to narrow search to a specific product category (exact match). Use 'manufacturer' to filter by manufacturer.",
-  parameters: z.object({
-    query: z.string().describe("Search query – short, focused keywords"),
-    max_results: z.number().default(10).describe("Max results (default 10)"),
-    manufacturer: z.string().nullable().default(null).describe("Filter by manufacturer name, or null"),
-    category: z.string().nullable().default(null).describe("Filter by category name (exact), or null"),
-  }),
-  async execute({ query, max_results, manufacturer, category }) {
-    const mfr = manufacturer ?? undefined;
-    const cat = category ?? undefined;
-    const t0 = Date.now();
-    const results = await searchProductsFulltext(query, max_results + 1, undefined, mfr, cat);
-    const elapsedMs = Date.now() - t0;
-    const hasMore = results.length > max_results;
-    const trimmed = results.slice(0, max_results);
-    const mapped = trimmed.map((r) => ({
-      sku: r.sku,
-      name: r.name,
-      manufacturer_code: r.manufacturer_code,
-      manufacturer: r.manufacturer,
-      category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-      unit: r.unit,
-      ean: r.ean,
-      relevance: Math.round((r.rank + r.similarity_score) * 100) / 100,
-    }));
-    return JSON.stringify({ results: mapped, total_returned: mapped.length, has_more: hasMore, elapsed_ms: elapsedMs });
-  },
-});
-
-const categoryInfoTool = tool({
-  name: "get_category_info",
-  description:
-    "Get details about product categories. Without arguments: returns top-level categories with counts. " +
-    "With category name: returns subcategories and top manufacturers for that category. " +
-    "Use this to discover the right category filter before searching.",
-  parameters: z.object({
-    category: z.string().nullable().default(null).describe("Category name to drill into, or null for top-level list"),
-  }),
-  async execute({ category }) {
-    const cat = category ?? undefined;
-    const info = await getCategoryInfo(cat);
-    return JSON.stringify(info);
-  },
-});
-
-export const searchAgent = new Agent({
-  name: "KV Search Agent",
-  instructions: `Jsi vyhledávací agent pro KV Elektro – českou B2B distribuci elektroinstalačního materiálu (471 000+ položek v katalogu).
-
-## Tvůj úkol
-Dostaneš název produktu z poptávky zákazníka. Použij nástroj search_products, abys ho našel v katalogu.
-Výsledek vrať VÝHRADNĚ jako JSON objekt (bez dalšího textu).
-
-## Kategorie produktů v katalogu (pro filtrování)
-
-Použij parametr \`category\` v search_products pro zúžení hledání:
-- **Svítidla** (91K) – LED, klasická, příslušenství
-- **Výkonové jističe a stykače** (32K) – jističe, stykače, motorové spouštěče
-- **Modulové přístroje** (8K) – chrániče, FID, pojistkové odpínače
-- **Kabely a vodiče** (6K) – CYKY, kabely
-- **Domovní spínače a zásuvky** (20K) – vypínače, zásuvky
-- **Rozvaděče a rozvodnice** (27K)
-- **Pojistky, odpínače** (14K)
-- **Úložný materiál** (34K) – žlaby, trubky, lišty
-- **Světelné zdroje** (11K) – žárovky, LED zdroje
-- **Automatizace, detekce, ovládací hlavice** (39K)
-- **Sdělovací a zabezpečovací technika** (13K)
-- **Kabelový spojovací, izolační materiál** (9K)
-- **Transformátory, zdroje a měření** (6K)
-- **Vidlice, spojky a prodlužovací přívody** (7K)
-- **Nářadí, měřící přístroje, zahrada** (19K)
-- **Topná technika** (3K) – přímotopy, konvektory
-- **Ventilátory** (3K)
-- **Fotovoltaika** (<1K) – solární panely, střídače
-- **Elektromobilita** (<1K) – nabíjecí stanice
-
-## Doménová znalost – elektrotechnika
-
-Zákazníci používají zkratky. Před vyhledáváním je rozviň:
-
-### Jističe (kategorie: "Výkonové jističe a stykače")
-- B3x16 = 3-pólový jistič, char. B, 16A → hledej "jistič 3P B16" nebo "3P B16"
-- C1x25 = 1-pólový jistič, char. C, 25A → hledej "jistič 1P C25"
-- Char.: B (nízký záběr), C (střední), D (motory)
-
-### Chrániče a kombinace (kategorie: "Modulové přístroje")
-- FI 2P 25A 30mA → proudový chránič 2P 25A 30mA
-- FID / RCBO → kombinovaný jistič + chránič
-
-### Kabely (kategorie: "Kabely a vodiče")
-- CYKY 3x2,5 → kabel CYKY 3 žíly 2,5mm²
-- CYKY-J = s ochranným vodičem, CYKY-O = bez
-
-### Svítidla (kategorie: "Svítidla")
-- čtvercové/hranaté → v katalogu jako "SQ" nebo "SQUARE"
-- kulaté/kruhové → v katalogu jako "ROUND" nebo "CIRCLE"
-- přisazené → "PRISAZENY", zapuštěné → "ZAPUSTNE"
-
-### Obecné
-- IP44/IP65 = stupeň krytí
-- W = watty, lm = lumeny, A = ampéry, P = póly
-
-## Strategie vyhledávání – ITERATIVNÍ (max 5 pokusů)
-
-### DŮLEŽITÉ: Hledej KRÁTKÝMI dotazy (2-4 slova)! Dlouhé dotazy jsou POMALÉ a vrací špatné výsledky.
-
-Odpověď search_products obsahuje \`elapsed_ms\` – doba vyhledávání v ms.
-- **< 100ms** = ideální, dotaz je správně krátký
-- **100-500ms** = OK, ale dotaz by mohl být kratší
-- **> 500ms** = dotaz je příliš dlouhý! ZKRAŤ ho na 2-3 slova v dalším pokusu
-
-1. **První pokus: KRÁTKÝ dotaz BEZ filtru** – max 2-3 klíčová slova (typ produktu + klíčový parametr). ODSTRAŇ watty, lumeny, barvu, rozměry. Příklad: "LED svítidlo IP54" → hledej "LED IP54" nebo "svítidlo průmyslové"
-2. **Pokud výsledky nejsou relevantní**: Přidej \`category\` filtr pro zúžení na správnou kategorii
-3. **Pokud has_more: true**: Přidej \`manufacturer\` filtr nebo konkrétnější klíčové slovo
-4. **Zkus alternativní termíny** (české ↔ anglické, zkratka ↔ plný název)
-5. **Kód výrobce** (např. "5SL6316-7"): Hledej přímo kód BEZ filtrů
-6. **Maximálně 5 pokusů** – pak vrať nejlepší dostupný výsledek nebo not_found
-7. **Pokud nevíš kategorii**: Zavolej get_category_info
-
-## Formát odpovědi
-
-Vrať VÝHRADNĚ tento JSON (bez markdown, bez vysvětlení):
-{
-  "matchType": "match" | "uncertain" | "multiple" | "alternative" | "not_found",
-  "confidence": 0-100,
-  "selectedSku": "SKU vybraného produktu nebo null",
-  "candidates": ["SKU1", "SKU2", ...],
-  "reasoning": "Stručné zdůvodnění (1 věta česky)"
-}
-
-### matchType pravidla:
-- **match**: Jsem si jistý, že to je správný produkt (confidence 85-100)
-- **uncertain**: Pravděpodobně správný, ale ne 100% (confidence 60-84)
-- **multiple**: Více rovnocenných kandidátů, uživatel musí vybrat (confidence 50-75)
-- **alternative**: Není přesná shoda, ale nabízím alternativu (confidence 30-59)
-- **not_found**: Nic odpovídajícího v katalogu (confidence 0)
-
-### candidates: Vždy uveď SKU kódy top kandidátů (max 5), i když vybereme jednoho.`,
-  model: "gpt-4.1-mini",
-  tools: [searchTool, categoryInfoTool],
-});
-
-const SEMANTIC_TOOL_DESCRIPTION =
-  "Search the KV Elektro product catalog using semantic similarity (vector embeddings). " +
-  "Use this to find products by meaning, not exact keywords. " +
-  "Best for: finding alternatives from different manufacturers, " +
-  "searching by product function/type when exact name is unknown, " +
-  "or when fulltext search returned no useful results. " +
-  "Query should describe what the product does or its technical characteristics.";
-
-const semanticSearchTool = tool({
-  name: "semantic_search",
-  description: SEMANTIC_TOOL_DESCRIPTION,
-  parameters: z.object({
-    query: z.string().describe("Natural language description of the product or its function"),
-    max_results: z.number().default(10).describe("Max results (default 10)"),
-    threshold: z.number().default(0.45).describe("Minimum similarity score 0-1 (default 0.45)"),
-  }),
-  async execute({ query, max_results, threshold }) {
-    const embedding = await generateQueryEmbedding(query);
-    const results = await searchProductsSemantic(embedding, max_results, threshold);
-    return JSON.stringify(
-      results.map((r) => ({
-        sku: r.sku,
-        name: r.name,
-        manufacturer_code: r.manufacturer_code,
-        manufacturer: r.manufacturer,
-        category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-        unit: r.unit,
-        ean: r.ean,
-        similarity: Math.round(r.cosine_similarity * 100) / 100,
-      })),
-    );
-  },
-});
-
-export const semanticSearchAgent = new Agent({
-  name: "KV Semantic Search Agent",
-  instructions: `Jsi agent pro sémantické vyhledávání alternativních produktů v katalogu KV Elektro – české B2B distribuce elektroinstalačního materiálu (471 000+ položek).
-
-## Tvůj úkol
-Dostaneš název produktu nebo jeho technický popis. Použij nástroj semantic_search k nalezení sémanticky podobných produktů – zejména alternativ od jiných výrobců nebo ekvivalentních produktů.
-
-## Kdy tě volají
-Jsi volaný jako druhá fáze vyhledávání – poté, co fulltext search (klíčová slova) nenašel přesnou shodu. Tvým cílem je najít ALTERNATIVY, ne přesné shody.
-
-## Strategie
-1. Přeformuluj vstup do přirozeného technického popisu (ne klíčová slova, ale popis funkce/typu produktu)
-2. Pokud vstup obsahuje kód výrobce, rozšiř ho o obecný popis produktu
-3. Zaměř se na: typ produktu, technické parametry, oblast použití
-4. Maximálně 2 pokusy s různými formulacemi
-
-## Příklady přeformulování
-- "B3x16" → "Třípólový jistič charakteristiky B s jmenovitým proudem 16A pro jištění elektrických obvodů"
-- "CYKY 3x2,5" → "Silový kabel s měděnými jádry 3 žíly průřez 2,5mm² s PVC izolací"
-- "XS618B1NBM12" → "Indukční snímač válcový M12 pro detekci kovových předmětů"
-
-## Formát odpovědi
-Vrať VÝHRADNĚ tento JSON (bez markdown, bez vysvětlení):
-{
-  "matchType": "alternative" | "not_found",
-  "confidence": 0-100,
-  "selectedSku": "SKU nejlepší alternativy nebo null",
-  "candidates": ["SKU1", "SKU2", ...],
-  "reasoning": "Stručné zdůvodnění (1 věta česky)"
-}
-
-### matchType pravidla:
-- **alternative**: Nalezena sémanticky podobná alternativa (confidence 30-70)
-- **not_found**: Ani sémanticky se nenašlo nic relevantního (confidence 0)
-
-### candidates: Uveď SKU kódy top alternativ (max 5).`,
-  model: "gpt-4.1-mini",
-  tools: [semanticSearchTool],
-});
+import { fetchProductsBySkus, getCategoryInfo } from "../search.js";
+import { searchPipelineForItem, type PipelineResult } from "../searchPipeline.js";
+import { generateSessionId, buildBatchSummaryEntry } from "../searchLogger.js";
 
 export const parserAgent = new Agent({
   name: "Inquiry Parser",
@@ -266,7 +42,7 @@ Výstup:
 // ──────────────────────────────────────────────────────────
 
 export type AgentEventCallback = (entry: {
-  type: "debug" | "action" | "tool_activity";
+  type: "debug" | "action" | "tool_activity" | "item_searching" | "item_matched" | "status";
   tool?: string;
   data: unknown;
 }) => Promise<void> | void;
@@ -274,86 +50,77 @@ export type AgentEventCallback = (entry: {
 const OFFER_AGENT_INSTRUCTIONS = `Jsi autonomní asistent pro správu nabídek v systému KV Elektro – česká B2B distribuce elektroinstalačního materiálu (471 000+ položek).
 
 ## Role
-Pracuješ s nabídkou SAMOSTATNĚ a PROAKTIVNĚ. Odpovídáš česky a okamžitě provádíš akce. NIKDY se neptej uživatele na potvrzení – sám vyhodnoť nejlepší variantu a rovnou ji aplikuj.
+Pracuješ s nabídkou SAMOSTATNĚ a PROAKTIVNĚ. Odpovídáš česky a okamžitě provádíš akce.
+NIKDY se neptej uživatele na potvrzení – sám vyhodnoť nejlepší variantu a rovnou ji aplikuj.
 
 ## Kontext
 Dostaneš aktuální stav nabídky (tabulka s pozicemi, názvy, výrobci, SKU kódy) a zprávu uživatele.
+Katalog zahrnuje svítidla, jističe, kabely, zásuvky, rozvaděče a další elektroinstalační materiál.
+
+## KRITICKÉ PRAVIDLO: EXISTUJÍCÍ vs NOVÉ položky
+
+Uživatel se PRIMÁRNĚ odkazuje na položky, které UŽ JSOU v nabídce (vidí je v tabulce).
+Rozlišuj dva zásadně odlišné scénáře:
+
+### A) Uživatel MODIFIKUJE existující položky v nabídce
+Příklady: "nahraď vše za ABB", "najdi alternativu k položce 3", "změň výrobce na Hager",
+"zkus najít levnější varianty", "přehoď na jiný typ"
+
+→ Pro KAŽDOU dotčenou pozici: search_product (s instrukcí) → replace_product_in_offer
+→ NIKDY nemazat + vytvářet znovu! Vždy replace_product_in_offer na dané pozici.
+→ NIKDY nepoužívat process_items — ten je JEN pro nové položky z externího vstupu.
+
+### B) Uživatel PŘIDÁVÁ nové položky z externího vstupu
+Příklady: "zpracuj tento mail", "přidej tyto položky", vložený seznam z Excelu,
+text poptávky, "založ mi: jistič B16, kabel CYKY 3x2,5..."
+
+→ Použij process_items — deleguje celý balík na search pipeline.
+
+PRAVIDLO: Pokud nabídka už obsahuje položky a uživatel nemluví o přidávání nových,
+vždy pracuj s EXISTUJÍCÍMI pozicemi. Neutvářej duplicity.
 
 ## Klíčové pravidlo: BUĎ AUTONOMNÍ
-
-- **NIKDY se neptej** "Chcete tento produkt?" nebo "Mám pokračovat?" – prostě to udělej.
-- **Vždy vyber nejlepší shodu** z výsledků vyhledávání a rovnou ji přiřaď.
-- **Při více kandidátech** vyber ten s nejlepší relevancí, správnou kategorií a odpovídajícími technickými parametry.
-- **Pokud uživatel řekne "přidej 3x vypínače od ABB"**, vyhledej, vyber 3 nejlepší různé vypínače od ABB a přidej je.
-- **Po dokončení** stručně shrň co jsi udělal.
-- **Ptej se POUZE pokud** je požadavek fundamentálně nejednoznačný.
-
-## Kategorie produktů (pro filtrování)
-
-Použij parametr \`category\` v search_products pro zúžení hledání:
-- **Svítidla** – LED, klasická, příslušenství
-- **Výkonové jističe a stykače** – jističe, stykače, motorové spouštěče
-- **Modulové přístroje** – chrániče, FID, pojistkové odpínače
-- **Kabely a vodiče** – CYKY, kabely
-- **Domovní spínače a zásuvky** – vypínače, zásuvky
-- **Rozvaděče a rozvodnice**
-- **Pojistky, odpínače**
-- **Úložný materiál** – žlaby, trubky, lišty
-- **Světelné zdroje** – žárovky, LED zdroje
-- **Automatizace, detekce, ovládací hlavice**
-- **Transformátory, zdroje a měření**
-- **Topná technika** – přímotopy, konvektory
-- **Ventilátory**
-- **Fotovoltaika** – solární panely, střídače
-
-## Doménová znalost – elektrotechnika
-
-Zákazníci používají zkratky. Před vyhledáváním je rozviň:
-- B3x16 = 3-pólový jistič, char. B, 16A → hledej "jistič 3P B16" (kategorie: "Výkonové jističe a stykače")
-- C1x25 = 1-pólový jistič, char. C, 25A → hledej "jistič 1P C25"
-- FI 2P 25A 30mA → proudový chránič 2P 25A 30mA (kategorie: "Modulové přístroje")
-- CYKY 3x2,5 → kabel CYKY 3 žíly 2,5mm² (kategorie: "Kabely a vodiče")
-- IP44/IP65 = stupeň krytí
-- W = watty, lm = lumeny, A = ampéry, P = póly
+- NIKDY se neptej "Chcete tento produkt?" — prostě to udělej.
+- Vždy vyber nejlepší shodu z výsledků a rovnou ji přiřaď.
+- Při více kandidátech vyber s nejlepší relevancí a technickými parametry.
+- Po dokončení stručně shrň co jsi udělal.
+- Ptej se POUZE pokud je požadavek fundamentálně nejednoznačný.
 
 ## Nástroje
 
-Máš 7 nástrojů. Používej je OKAMŽITĚ, nečekej na souhlas:
+### HROMADNÉ ZPRACOVÁNÍ — NOVÉ položky z externího vstupu
+- **process_items** — Deleguje seznam NOVÝCH položek na search pipeline.
+  Vytvoří položky v nabídce a pro KAŽDOU automaticky spustí AI vyhledávání (paralelně).
+  Ke každé položce můžeš přidat instrukci (např. "hledej od ABB").
+  Použij POUZE pro NOVÉ položky z externího vstupu (mail, tabulka, výpis, seznam).
+  NIKDY nepoužívej pro modifikaci existujících položek v nabídce!
 
-### Vyhledávání
-- **search_products** – fulltext (klíčová slova, kódy, SKU). Použij \`manufacturer\` a \`category\` pro filtrování. Odpověď obsahuje \`has_more\` – pokud true, zpřesni dotaz.
-- **semantic_search** – sémantické vyhledávání (alternativy). Použij \`manufacturer\` pro filtrování.
-- **get_category_info** – zjisti kategorie, subcategorie a výrobce. Zavolej když si nejsi jistý kategorií.
+### VYHLEDÁVÁNÍ (pro modifikaci existujících položek nebo ad-hoc dotazy)
+- **search_product** — AI pipeline pro vyhledání jednoho produktu.
+  Použij pro: hledání alternativy k existující položce, nahrazení výrobce,
+  ad-hoc dotaz v chatu. Vrací: matchType, confidence, vybraný produkt, kandidáty, reasoning.
+- **get_category_info** — zjisti kategorie a výrobce v katalogu.
 
 ### Akce na nabídce
-- **add_item_to_offer** – přidej položku (nejdříve vyhledej SKU).
-- **replace_product_in_offer** – vyměň produkt na pozici.
-- **remove_item_from_offer** – odstraň položku.
-- **parse_items_from_text** – parsuj seznam položek z textu/e-mailu.
+- **add_item_to_offer** — přidej JEDNU novou položku (nejdříve vyhledej SKU).
+- **replace_product_in_offer** — vyměň produkt na existující pozici.
+  Použij po search_product pro nahrazení produktu na dané pozici.
+- **remove_item_from_offer** — odstraň položku z nabídky.
+- **parse_items_from_text** — pouze parsuj seznam položek BEZ vyhledávání.
+  Použij jen když uživatel výslovně říká "jen je vypiš" nebo "neprohledávej".
 
-## Strategie vyhledávání – ITERATIVNÍ (max 5 pokusů na položku)
-
-### DŮLEŽITÉ: Hledej KRÁTKÝMI dotazy (2-4 slova)! Dlouhé dotazy jsou POMALÉ.
-
-Odpověď search_products obsahuje \`elapsed_ms\` – doba vyhledávání v ms.
-- **< 100ms** = ideální, dotaz je správně krátký
-- **100-500ms** = OK, ale dotaz by mohl být kratší
-- **> 500ms** = dotaz je příliš dlouhý! ZKRAŤ ho na 2-3 slova v dalším pokusu
-
-1. **První pokus: KRÁTKÝ dotaz BEZ filtru** – max 2-3 klíčová slova. ODSTRAŇ watty, lumeny, barvu, rozměry
-2. **Pokud výsledky nejsou relevantní**: Přidej \`category\` filtr pro zúžení
-3. **Pokud has_more: true**: Přidej \`manufacturer\` filtr nebo konkrétnější klíčové slovo
-4. **Zkus alternativní termíny** (české ↔ anglické, zkratka ↔ plný název)
-5. **Kód výrobce** (např. "5SL6316-7"): Hledej přímo kód BEZ filtrů
-6. **Maximálně 5 pokusů** na položku, pak vrať nejlepší dostupný výsledek
-7. **Pokud nevíš kategorii**: Zavolej get_category_info
+### Hlavička nabídky
+- **update_offer_header** — vyplň nebo aktualizuj údaje zákazníka (IČ, jméno, termín dodání, název zakázky, telefon, email, pobočka, adresa dodání, spec. akce). Zavolej VŽDY, když ze vstupu dokážeš vyextrahovat jakákoliv zákaznická data.
 
 ## Jak pracuješ
-
-1. **Jednej okamžitě** – jakmile pochopíš záměr, začni.
-2. **Hromadné operace** – projdi nabídku, pro KAŽDOU položku vyhledej a proveď akci.
-3. **Stručné shrnutí na konci** – napiš co jsi udělal.
-4. **Informační dotazy** – odpověz jen textem.`;
+1. Jednej okamžitě — jakmile pochopíš záměr, začni.
+2. NOVÉ položky z externího vstupu → process_items.
+3. Modifikace EXISTUJÍCÍCH položek → search_product + replace_product_in_offer pro každou pozici.
+4. Jednotlivý ad-hoc dotaz → search_product + add_item_to_offer.
+5. Stručné shrnutí na konci — napiš co jsi udělal.
+6. Informační dotazy — odpověz jen textem.
+7. Pokud vstup obsahuje zákaznická data (IČ, jméno, adresa, datum...), vyplň hlavičku přes update_offer_header.
+8. Pokud vstup obsahuje seznam položek I zákaznická data, zavolej OBOJÍ: update_offer_header + process_items.`;
 
 /**
  * Creates a streaming offer agent with debug + action callbacks.
@@ -361,91 +128,83 @@ Odpověď search_products obsahuje \`elapsed_ms\` – doba vyhledávání v ms.
  * All UI actions are implemented as tools the agent calls.
  */
 export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
-  // ── Search tools (with debug + manufacturer filter) ──
+  // Cache last search results so add_item / replace_product can include candidates
+  const searchResultCache = new Map<string, PipelineResult>();
 
-  const streamingSearchTool = tool({
-    name: "search_products",
-    description:
-      SEARCH_TOOL_DESCRIPTION +
-      " Use 'manufacturer' to filter by manufacturer. Use 'category' to narrow to a specific category (exact match). " +
-      "Response includes 'has_more' flag – if true, there are more results available; refine your query with filters.",
-    parameters: z.object({
-      query: z.string().describe("Search query – short, focused keywords"),
-      max_results: z.number().default(10).describe("Max results (default 10)"),
-      manufacturer: z.string().nullable().default(null).describe("Filter by manufacturer name (e.g. 'Eaton', 'ABB', 'OEZ'), or null for no filter"),
-      category: z.string().nullable().default(null).describe("Filter by category name (exact match, e.g. 'Svítidla', 'Výkonové jističe a stykače'), or null"),
-    }),
-    async execute({ query, max_results, manufacturer, category }) {
-      const mfr = manufacturer ?? undefined;
-      const cat = category ?? undefined;
-      await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "start", query, manufacturer: mfr, category: cat } });
-      await onEvent({ type: "debug", tool: "search_products", data: { query, max_results, manufacturer: mfr, category: cat } });
-      try {
-        const t0 = Date.now();
-        const results = await searchProductsFulltext(query, max_results + 1, undefined, mfr, cat);
-        const elapsedMs = Date.now() - t0;
-        const hasMore = results.length > max_results;
-        const trimmed = results.slice(0, max_results);
-        const mapped = trimmed.map((r) => ({
-          sku: r.sku,
-          name: r.name,
-          manufacturer_code: r.manufacturer_code,
-          manufacturer: r.manufacturer,
-          category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-          unit: r.unit,
-          ean: r.ean,
-          relevance: Math.round((r.rank + r.similarity_score) * 100) / 100,
-        }));
-        await onEvent({ type: "debug", tool: "search_products", data: { type: "result", count: mapped.length, has_more: hasMore, elapsed_ms: elapsedMs, top3: mapped.slice(0, 3) } });
-        await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "end" } });
-        return JSON.stringify({ results: mapped, total_returned: mapped.length, has_more: hasMore, elapsed_ms: elapsedMs });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown search error";
-        console.error("[search_products] Error:", msg);
-        await onEvent({ type: "debug", tool: "search_products", data: { type: "error", error: msg } });
-        await onEvent({ type: "tool_activity", tool: "search_products", data: { status: "end" } });
-        return JSON.stringify({ error: msg, results: [], has_more: false });
-      }
-    },
-  });
+  // ── Search tool (delegates to AI pipeline) ──
 
-  const streamingSemanticTool = tool({
-    name: "semantic_search",
+  const streamingSearchProductTool = tool({
+    name: "search_product",
     description:
-      SEMANTIC_TOOL_DESCRIPTION +
-      " Use the optional 'manufacturer' parameter to filter results by a specific manufacturer.",
+      "Search for a product in the KV Elektro catalog using the AI search pipeline. " +
+      "The pipeline automatically reformulates the query, runs dual semantic + fulltext search, " +
+      "merges results, and evaluates with AI. " +
+      "Returns: matchType, confidence (0-100), selected product, up to 5 candidates, and reasoning. " +
+      "You do NOT need to iterate or reformulate — the pipeline does it for you.",
     parameters: z.object({
-      query: z.string().describe("Natural language description of the product or its function"),
-      max_results: z.number().default(10).describe("Max results (default 10)"),
-      threshold: z.number().default(0.45).describe("Minimum similarity score 0-1 (default 0.45)"),
-      manufacturer: z.string().nullable().default(null).describe("Filter by manufacturer name, or null for no filter"),
+      query: z.string().describe("Product name or description to search for"),
     }),
-    async execute({ query, max_results, threshold, manufacturer }) {
-      const mfr = manufacturer ?? undefined;
-      await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "start", query, manufacturer: mfr } });
-      await onEvent({ type: "debug", tool: "semantic_search", data: { query, max_results, threshold, manufacturer: mfr } });
+    async execute({ query }) {
+      await onEvent({ type: "tool_activity", tool: "search_product", data: { status: "start", query } });
+      await onEvent({ type: "debug", tool: "search_product", data: { query } });
       try {
-        const embedding = await generateQueryEmbedding(query);
-        const results = await searchProductsSemantic(embedding, max_results, threshold, undefined, mfr);
-        const mapped = results.map((r) => ({
-          sku: r.sku,
-          name: r.name,
-          manufacturer_code: r.manufacturer_code,
-          manufacturer: r.manufacturer,
-          category: [r.category, r.subcategory, r.sub_subcategory].filter(Boolean).join(" > "),
-          unit: r.unit,
-          ean: r.ean,
-          similarity: Math.round(r.cosine_similarity * 100) / 100,
-        }));
-        await onEvent({ type: "debug", tool: "semantic_search", data: { type: "result", count: mapped.length, top3: mapped.slice(0, 3) } });
-        await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "end" } });
-        return JSON.stringify(mapped);
+        const result = await searchPipelineForItem(
+          { name: query, unit: null, quantity: null },
+          0,
+          (entry) => {
+            void Promise.resolve(onEvent({ type: "debug", tool: "search_product", data: entry })).catch(() => {});
+          },
+        );
+        await onEvent({
+          type: "debug",
+          tool: "search_product",
+          data: {
+            type: "result",
+            matchType: result.matchType,
+            confidence: result.confidence,
+            selectedSku: result.product?.sku ?? null,
+            candidateCount: result.candidates.length,
+            pipelineMs: result.pipelineMs,
+          },
+        });
+        await onEvent({ type: "tool_activity", tool: "search_product", data: { status: "end" } });
+
+        if (result.product?.sku) {
+          searchResultCache.set(result.product.sku, result);
+        }
+
+        return JSON.stringify({
+          matchType: result.matchType,
+          confidence: result.confidence,
+          selectedSku: result.product?.sku ?? null,
+          selectedProduct: result.product
+            ? {
+                sku: result.product.sku,
+                name: result.product.name,
+                manufacturer: result.product.manufacturer,
+                manufacturer_code: result.product.manufacturer_code,
+                category: result.product.category,
+                subcategory: result.product.subcategory,
+                unit: result.product.unit,
+                ean: result.product.ean,
+              }
+            : null,
+          candidates: result.candidates.map((c) => ({
+            sku: c.sku,
+            name: c.name,
+            manufacturer: c.manufacturer,
+            category: c.category,
+          })),
+          reasoning: result.reasoning,
+          reformulatedQuery: result.reformulatedQuery,
+          pipelineMs: result.pipelineMs,
+        });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown search error";
-        console.error("[semantic_search] Error:", msg);
-        await onEvent({ type: "debug", tool: "semantic_search", data: { type: "error", error: msg } });
-        await onEvent({ type: "tool_activity", tool: "semantic_search", data: { status: "end" } });
-        return JSON.stringify({ error: msg, results: [] });
+        const msg = err instanceof Error ? err.message : "Search failed";
+        console.error("[search_product] Error:", msg);
+        await onEvent({ type: "debug", tool: "search_product", data: { type: "error", error: msg } });
+        await onEvent({ type: "tool_activity", tool: "search_product", data: { status: "end" } });
+        return JSON.stringify({ error: msg, matchType: "not_found", confidence: 0 });
       }
     },
   });
@@ -496,9 +255,19 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
           const products = await fetchProductsBySkus([selectedSku]);
           product = products[0] ?? null;
         }
+
+        const cached = selectedSku ? searchResultCache.get(selectedSku) : undefined;
+        const candidates = cached?.candidates ?? [];
+        const matchType = cached?.matchType ?? (product ? "match" : "not_found");
+        const confidence = cached?.confidence ?? (product ? 85 : 0);
+        const reasoning = cached?.reasoning ?? undefined;
+
         await onEvent({
           type: "action",
-          data: { type: "add_item", name, quantity, selectedSku, product },
+          data: {
+            type: "add_item", name, quantity, selectedSku, product,
+            candidates, matchType, confidence, reasoning,
+          },
         });
         await onEvent({ type: "tool_activity", tool: "add_item_to_offer", data: { status: "end" } });
         return product
@@ -529,9 +298,18 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
         let product = null;
         const products = await fetchProductsBySkus([selectedSku]);
         product = products[0] ?? null;
+
+        const cached = searchResultCache.get(selectedSku);
+        const candidates = cached?.candidates ?? [];
+        const matchType = cached?.matchType ?? (product ? "match" : "not_found");
+        const confidence = cached?.confidence ?? (product ? 100 : 0);
+
         await onEvent({
           type: "action",
-          data: { type: "replace_product", position, selectedSku, reasoning, product },
+          data: {
+            type: "replace_product", position, selectedSku, reasoning, product,
+            candidates, matchType, confidence,
+          },
         });
         await onEvent({ type: "tool_activity", tool: "replace_product_in_offer", data: { status: "end" } });
         return product
@@ -585,6 +363,158 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     },
   });
 
+  // ── Batch delegation tool ──
+
+  const BATCH_CONCURRENCY = 30;
+
+  const processItemsTool = tool({
+    name: "process_items",
+    description:
+      "Deleguj seznam položek ke zpracování — vytvoří položky v nabídce a AUTOMATICKY pro každou spustí AI search pipeline. " +
+      "Výsledky se streamují průběžně. Použij pro seznamy 2+ položek (mail, seznam, poptávka). " +
+      "NEMUSÍŠ volat search_product ani add_item_to_offer — pipeline vše vyřeší. " +
+      "Vrací shrnutí výsledků.",
+    parameters: z.object({
+      items: z.array(z.object({
+        name: z.string().describe("Product name exactly as written"),
+        quantity: z.number().nullable().describe("Quantity or null"),
+        unit: z.string().nullable().describe("Unit (ks, m, etc.) or null"),
+        instruction: z.string().nullable().describe("Optional extra context for this item search (e.g. 'hledej od ABB', 'jde o kabel')"),
+      })).describe("Items to process"),
+    }),
+    async execute({ items }) {
+      await onEvent({ type: "tool_activity", tool: "process_items", data: { status: "start", count: items.length } });
+
+      await onEvent({
+        type: "action",
+        data: {
+          type: "process_items",
+          items: items.map((it) => ({
+            name: it.name,
+            quantity: it.quantity,
+            unit: it.unit,
+          })),
+        },
+      });
+
+      const sessionId = generateSessionId();
+      const batchT0 = Date.now();
+      const matchResults: PipelineResult[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        void Promise.resolve(
+          onEvent({ type: "item_searching", data: { position: i, name: items[i].name } }),
+        ).catch(() => {});
+      }
+
+      let cursor = 0;
+      const runNext = async (): Promise<void> => {
+        const idx = cursor++;
+        if (idx >= items.length) return;
+
+        const item = items[idx];
+        try {
+          const result = await searchPipelineForItem(
+            { name: item.name, unit: item.unit, quantity: item.quantity, instruction: item.instruction },
+            idx,
+            (entry) => {
+              void Promise.resolve(
+                onEvent({ type: "debug", tool: "process_items", data: entry }),
+              ).catch(() => {});
+            },
+          );
+          matchResults.push(result);
+          void Promise.resolve(
+            onEvent({ type: "item_matched", data: result }),
+          ).catch(() => {});
+        } catch {
+          const failResult: PipelineResult = {
+            position: idx,
+            originalName: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            matchType: "not_found",
+            confidence: 0,
+            product: null,
+            candidates: [],
+            reasoning: "Pipeline unexpectedly failed.",
+            reformulatedQuery: "",
+            pipelineMs: 0,
+          };
+          matchResults.push(failResult);
+          void Promise.resolve(
+            onEvent({ type: "item_matched", data: failResult }),
+          ).catch(() => {});
+        }
+
+        await runNext();
+      };
+
+      const workers = Array.from(
+        { length: Math.min(BATCH_CONCURRENCY, items.length) },
+        () => runNext(),
+      );
+      await Promise.all(workers);
+
+      void Promise.resolve(
+        onEvent({ type: "debug", tool: "process_items", data: buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0) }),
+      ).catch(() => {});
+
+      void Promise.resolve(
+        onEvent({ type: "status", data: { phase: "review" } }),
+      ).catch(() => {});
+
+      await onEvent({ type: "tool_activity", tool: "process_items", data: { status: "end" } });
+
+      const matched = matchResults.filter((r) => r.matchType === "match" || r.matchType === "uncertain" || r.matchType === "multiple").length;
+      const notFound = matchResults.filter((r) => r.matchType === "not_found").length;
+      const alternative = matchResults.filter((r) => r.matchType === "alternative").length;
+      const totalMs = Date.now() - batchT0;
+
+      return `Zpracováno ${items.length} položek (${totalMs}ms). Nalezeno: ${matched}, alternativa: ${alternative}, nenalezeno: ${notFound}.`;
+    },
+  });
+
+  const updateHeaderTool = tool({
+    name: "update_offer_header",
+    description:
+      "Update customer/offer header fields. Only provide fields you want to change — " +
+      "omitted or null fields are left unchanged. Use this to fill in customer data extracted from text input " +
+      "(email, pasted order, etc.).",
+    parameters: z.object({
+      customerIco: z.string().nullable().default(null).describe("Customer ID / IČ"),
+      customerName: z.string().nullable().default(null).describe("Customer name"),
+      deliveryDate: z.string().nullable().default(null).describe("Delivery date (YYYY-MM-DD or locale format)"),
+      offerName: z.string().nullable().default(null).describe("Offer name / order reference"),
+      phone: z.string().nullable().default(null).describe("Contact phone number"),
+      email: z.string().nullable().default(null).describe("Contact email"),
+      specialAction: z.string().nullable().default(null).describe("Special action code"),
+      branch: z.string().nullable().default(null).describe("Branch / pickup location"),
+      deliveryAddress: z.string().nullable().default(null).describe("Delivery address"),
+    }),
+    async execute(fields) {
+      await onEvent({ type: "tool_activity", tool: "update_offer_header", data: { status: "start" } });
+
+      const updates: Record<string, string> = {};
+      for (const [key, value] of Object.entries(fields)) {
+        if (value != null && value !== "") {
+          updates[key] = value;
+        }
+      }
+
+      await onEvent({
+        type: "action",
+        data: { type: "update_header", fields: updates },
+      });
+      await onEvent({ type: "tool_activity", tool: "update_offer_header", data: { status: "end" } });
+
+      const filled = Object.keys(updates);
+      return filled.length > 0
+        ? `Hlavička aktualizována: ${filled.join(", ")}.`
+        : "Žádná pole k aktualizaci.";
+    },
+  });
+
   return new Agent({
     name: "KV Offer Assistant",
     instructions: OFFER_AGENT_INSTRUCTIONS,
@@ -593,13 +523,14 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       reasoning: { effort: "low" },
     },
     tools: [
-      streamingSearchTool,
-      streamingSemanticTool,
+      streamingSearchProductTool,
       streamingCategoryInfoTool,
       addItemTool,
       replaceProductTool,
       removeItemTool,
       parseItemsTool,
+      processItemsTool,
+      updateHeaderTool,
     ],
   });
 }

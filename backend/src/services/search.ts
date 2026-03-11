@@ -85,7 +85,7 @@ export async function getCategoryInfo(
 }
 
 /**
- * Semantic vector search (requires embeddings to be generated).
+ * Semantic vector search via product_embeddings table + HNSW index.
  */
 export async function searchProductsSemantic(
   embedding: number[],
@@ -93,6 +93,7 @@ export async function searchProductsSemantic(
   threshold = 0.5,
   client?: SupabaseClient,
   manufacturer?: string,
+  category?: string,
 ): Promise<SemanticResult[]> {
   const supabase = client ?? getAdminClient();
 
@@ -102,14 +103,39 @@ export async function searchProductsSemantic(
     similarity_threshold: threshold,
   };
   if (manufacturer) rpcParams.manufacturer_filter = manufacturer;
+  if (category) rpcParams.category_filter = category;
 
-  const { data, error } = await supabase.rpc("search_products_semantic", rpcParams);
+  const { data, error } = await supabase.rpc("search_product_embeddings_semantic", rpcParams);
 
   if (error) {
     throw new Error(`Semantic search failed: ${error.message}`);
   }
 
   return (data ?? []) as SemanticResult[];
+}
+
+export interface CategoryTreeEntry {
+  category: string;
+  subcategory: string;
+  sub_subcategory: string | null;
+  product_count: number;
+}
+
+/**
+ * Load the full category tree from the DB (subcategory/sub_subcategory with counts).
+ */
+export async function getCategoryTree(
+  client?: SupabaseClient,
+): Promise<CategoryTreeEntry[]> {
+  const supabase = client ?? getAdminClient();
+
+  const { data, error } = await supabase.rpc("get_category_tree");
+
+  if (error) {
+    throw new Error(`Category tree failed: ${error.message}`);
+  }
+
+  return (data ?? []) as CategoryTreeEntry[];
 }
 
 /**

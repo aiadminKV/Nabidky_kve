@@ -30,6 +30,19 @@ export interface ParsedItem {
   extraColumns?: Record<string, string>;
 }
 
+/** Customer/offer header data for export */
+export interface OfferHeader {
+  customerIco: string;
+  customerName: string;
+  deliveryDate: string;
+  offerName: string;
+  phone: string;
+  email: string;
+  specialAction: string;
+  branch: string;
+  deliveryAddress: string;
+}
+
 /** A matched offer item after search */
 export interface OfferItem {
   position: number;
@@ -40,6 +53,9 @@ export interface OfferItem {
   confidence: number;
   product: Product | null;
   candidates: Product[];
+  reasoning?: string;
+  reformulatedQuery?: string;
+  pipelineMs?: number;
   confirmed?: boolean;
   extraColumns?: Record<string, string>;
 }
@@ -63,14 +79,16 @@ export interface OfferItemSummary {
 /** Actions returned by the offer agent */
 export type OfferAction =
   | { type: "parse_items"; items: Array<{ name: string; quantity: number | null }> }
-  | { type: "add_item"; name: string; quantity: number | null; selectedSku: string | null; product?: Product | null }
-  | { type: "replace_product"; position: number; selectedSku: string; reasoning: string; product?: Product | null }
-  | { type: "remove_item"; position: number };
+  | { type: "process_items"; items: Array<{ name: string; quantity: number | null; unit: string | null }> }
+  | { type: "add_item"; name: string; quantity: number | null; selectedSku: string | null; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number; reasoning?: string }
+  | { type: "replace_product"; position: number; selectedSku: string; reasoning: string; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number }
+  | { type: "remove_item"; position: number }
+  | { type: "update_header"; fields: Partial<OfferHeader> };
 
 /** Debug log entry from agent execution */
 export interface DebugEntry {
   ts: number;
-  type: "prompt" | "tool_call" | "tool_result" | "raw_output" | "parsed_actions" | "error";
+  type: "prompt" | "tool_call" | "tool_result" | "raw_output" | "parsed_actions" | "error" | "search_trace";
   tool?: string;
   data: unknown;
 }

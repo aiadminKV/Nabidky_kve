@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 const inter = Inter({
@@ -7,8 +7,13 @@ const inter = Inter({
   variable: "--font-inter",
 });
 
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-mono",
+});
+
 export const metadata: Metadata = {
-  title: "K&V ELEKTRO – Správce nabídek",
+  title: "K&V ELEKTRO – Data Bridge PRO",
   description: "AI-řízené zpracování B2B poptávek pro K&V ELEKTRO a.s.",
 };
 
@@ -18,8 +23,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="cs" className={inter.variable}>
-      <body className="bg-white text-kv-gray-800 antialiased">{children}</body>
+    <html lang="cs" className={`${inter.variable} ${jetbrainsMono.variable}`}>
+      <body className="bg-kv-gray-50 text-kv-gray-800 antialiased">{children}</body>
     </html>
   );
 }

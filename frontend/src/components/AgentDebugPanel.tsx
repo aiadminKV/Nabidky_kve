@@ -15,6 +15,7 @@ const TYPE_COLORS: Record<string, string> = {
   raw_output: "text-emerald-300",
   parsed_actions: "text-blue-400",
   error: "text-red-400",
+  search_trace: "text-violet-400",
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -24,6 +25,7 @@ const TYPE_LABELS: Record<string, string> = {
   raw_output: "RAW OUTPUT",
   parsed_actions: "ACTIONS",
   error: "ERROR",
+  search_trace: "SEARCH",
 };
 
 function formatTs(ts: number): string {
@@ -46,6 +48,7 @@ function formatData(data: unknown): string {
 export function AgentDebugPanel({ entries, onClear }: AgentDebugPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 
   useEffect(() => {
@@ -70,80 +73,99 @@ export function AgentDebugPanel({ entries, onClear }: AgentDebugPanelProps) {
   };
 
   return (
-    <div className="flex flex-col bg-[#0d1117] border-t border-[#30363d] font-mono text-xs">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#30363d] bg-[#161b22]">
-        <div className="flex items-center gap-2">
-          <span className="text-green-400 font-bold text-[11px] tracking-wider">
-            AGENT DEBUG
-          </span>
-          <span className="text-[#484f58] text-[10px]">
-            {entries.length} events
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={onClear}
-            className="px-2 py-0.5 text-[10px] text-[#8b949e] hover:text-white hover:bg-[#30363d] rounded transition-colors"
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-
-      {/* Log entries */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="overflow-y-auto overflow-x-hidden px-3 py-2 space-y-1"
-        style={{ maxHeight: "320px", minHeight: "160px" }}
+    <div className="shrink-0 mx-3 mb-2">
+      {/* Toggle bar - always visible */}
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className={`w-full flex items-center justify-between px-3 py-2 bg-[#1f2937] transition-colors hover:bg-[#283548] ${
+          expanded ? "rounded-t-lg" : "rounded-lg"
+        }`}
       >
-        {entries.length === 0 && (
-          <div className="text-[#484f58] text-center py-6 select-none">
-            Waiting for agent activity...
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <svg
+            className={`h-3 w-3 text-slate-500 transition-transform ${expanded ? "rotate-90" : ""}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+          <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
+            Raw JSON Output
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {entries.length > 0 && (
+            <span className="text-[9px] font-mono text-emerald-500/70">
+              {entries.length} events
+            </span>
+          )}
+          {expanded && entries.length > 0 && (
+            <span
+              onClick={(e) => { e.stopPropagation(); onClear(); }}
+              className="px-1.5 py-0.5 text-[9px] text-slate-500 hover:text-white hover:bg-slate-600 rounded transition-colors uppercase tracking-wider font-bold cursor-pointer"
+            >
+              Clear
+            </span>
+          )}
+        </div>
+      </button>
 
-        {entries.map((entry, idx) => {
-          const isCollapsed = collapsed.has(idx);
-          const color = TYPE_COLORS[entry.type] ?? "text-green-400";
-          const label = TYPE_LABELS[entry.type] ?? entry.type.toUpperCase();
-          const formatted = formatData(entry.data);
-          const isLong = formatted.length > 200;
-          const toolTag = entry.tool ? ` [${entry.tool}]` : "";
+      {/* Content - only when expanded */}
+      {expanded && (
+        <div className="bg-[#111827] rounded-b-lg overflow-hidden shadow-inner border-t border-slate-800">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="overflow-y-auto overflow-x-hidden p-3 space-y-1 dark-scrollbar"
+            style={{ maxHeight: "220px" }}
+          >
+            {entries.length === 0 && (
+              <pre className="text-emerald-500/60 font-mono text-[11px] whitespace-pre select-none text-center py-4">
+                Awaiting agent activity...
+              </pre>
+            )}
 
-          return (
-            <div key={idx} className="group">
-              <div
-                className="flex items-start gap-2 cursor-pointer hover:bg-[#161b22] rounded px-1 py-0.5"
-                onClick={() => isLong && toggleCollapse(idx)}
-              >
-                <span className="text-[#484f58] whitespace-nowrap shrink-0">
-                  {formatTs(entry.ts)}
-                </span>
-                <span className={`font-bold whitespace-nowrap shrink-0 ${color}`}>
-                  {label}{toolTag}
-                </span>
-                {isLong && (
-                  <span className="text-[#484f58] shrink-0 select-none">
-                    {isCollapsed ? "▶" : "▼"}
-                  </span>
-                )}
-              </div>
-              {(!isLong || !isCollapsed) && (
-                <pre className="text-green-400/80 whitespace-pre-wrap break-all pl-[72px] leading-relaxed">
-                  {formatted}
-                </pre>
-              )}
-              {isLong && isCollapsed && (
-                <div className="text-[#484f58] pl-[72px] truncate">
-                  {formatted.slice(0, 120)}...
+            {entries.map((entry, idx) => {
+              const isCollapsed = collapsed.has(idx);
+              const color = TYPE_COLORS[entry.type] ?? "text-emerald-400";
+              const label = TYPE_LABELS[entry.type] ?? entry.type.toUpperCase();
+              const formatted = formatData(entry.data);
+              const isLong = formatted.length > 200;
+              const toolTag = entry.tool ? ` [${entry.tool}]` : "";
+
+              return (
+                <div key={idx} className="group font-mono text-[11px]">
+                  <div
+                    className="flex items-start gap-2 cursor-pointer hover:bg-white/5 rounded px-1 py-0.5"
+                    onClick={() => isLong && toggleCollapse(idx)}
+                  >
+                    <span className="text-slate-600 whitespace-nowrap shrink-0">
+                      {formatTs(entry.ts)}
+                    </span>
+                    <span className={`font-bold whitespace-nowrap shrink-0 ${color}`}>
+                      {label}{toolTag}
+                    </span>
+                    {isLong && (
+                      <span className="text-slate-600 shrink-0 select-none">
+                        {isCollapsed ? "▶" : "▼"}
+                      </span>
+                    )}
+                  </div>
+                  {(!isLong || !isCollapsed) && (
+                    <pre className="text-emerald-500/80 whitespace-pre-wrap break-all pl-[72px] leading-relaxed">
+                      {formatted}
+                    </pre>
+                  )}
+                  {isLong && isCollapsed && (
+                    <div className="text-slate-600 pl-[72px] truncate">
+                      {formatted.slice(0, 120)}...
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

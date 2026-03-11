@@ -21,7 +21,7 @@ const CONFIG: Record<MatchType | "processing", {
     textColor: "text-status-uncertain",
   },
   multiple: {
-    label: "Více možností",
+    label: "Více",
     dotColor: "bg-status-multiple",
     bgColor: "bg-status-multiple-bg",
     textColor: "text-status-multiple",
@@ -55,15 +55,15 @@ export function StatusBadge({ type, confidence }: StatusBadgeProps) {
   const cfg = CONFIG[type];
 
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${cfg.bgColor} ${cfg.textColor}`}>
+    <span className={`inline-flex w-[120px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${cfg.bgColor} ${cfg.textColor}`}>
       {type === "processing" ? (
-        <span className={`h-2 w-2 rounded-full ${cfg.dotColor} animate-pulse-subtle`} />
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cfg.dotColor} animate-pulse-subtle`} />
       ) : (
-        <span className={`h-2 w-2 rounded-full ${cfg.dotColor}`} />
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cfg.dotColor}`} />
       )}
       {cfg.label}
       {confidence != null && confidence > 0 && type !== "processing" && (
-        <span className="opacity-70">{confidence}%</span>
+        <span className="opacity-60 tabular-nums">{confidence}%</span>
       )}
     </span>
   );

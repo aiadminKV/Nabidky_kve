@@ -73,4 +73,43 @@ profileRouter.put("/profile", async (c) => {
   });
 });
 
+profileRouter.post("/profile/change-password", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json<{
+    currentPassword: string;
+    newPassword: string;
+  }>();
+
+  if (!body.currentPassword || !body.newPassword) {
+    return c.json({ error: "Vyplňte staré i nové heslo." }, 400);
+  }
+
+  if (body.newPassword.length < 6) {
+    return c.json({ error: "Nové heslo musí mít alespoň 6 znaků." }, 400);
+  }
+
+  const supabase = getAdminClient();
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: user.email!,
+    password: body.currentPassword,
+  });
+
+  if (signInError) {
+    return c.json({ error: "Staré heslo je nesprávné." }, 403);
+  }
+
+  const { error: updateError } = await supabase.auth.admin.updateUserById(
+    user.id,
+    { password: body.newPassword },
+  );
+
+  if (updateError) {
+    console.error("[change-password] Update failed:", updateError.message);
+    return c.json({ error: "Nepodařilo se změnit heslo." }, 500);
+  }
+
+  return c.json({ ok: true });
+});
+
 export { profileRouter };

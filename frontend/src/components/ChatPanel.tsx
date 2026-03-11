@@ -1,16 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type DragEvent, type ClipboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type DragEvent, type ReactNode } from "react";
 import type { ChatMessage, ToolCallStatus } from "@/lib/types";
 
 const TOOL_ICONS: Record<string, string> = {
-  search_products: "🔍",
-  semantic_search: "🧠",
+  search_product: "🔍",
   get_category_info: "📂",
   add_item_to_offer: "➕",
   replace_product_in_offer: "🔄",
   remove_item_from_offer: "🗑",
   parse_items_from_text: "📋",
+  update_offer_header: "📝",
 };
 
 function ToolCallChip({ tc }: { tc: ToolCallStatus }) {
@@ -41,9 +41,10 @@ interface ChatPanelProps {
   onSendMessage: (text: string) => void;
   onFileUpload: (file: File) => void;
   onPasteDetected?: (text: string) => void;
+  debugSlot?: ReactNode;
 }
 
-export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload, onPasteDetected }: ChatPanelProps) {
+export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload, onPasteDetected, debugSlot }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -78,24 +79,29 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
     [onFileUpload],
   );
 
-  const isTSV = useCallback((text: string): boolean => {
-    const lines = text.split("\n").filter((l) => l.trim());
+  const isTabular = useCallback((text: string): boolean => {
+    const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const lines = normalized.split("\n").filter((l) => l.trim());
     if (lines.length < 2) return false;
-    const tabLines = lines.filter((l) => l.includes("\t"));
-    return tabLines.length > lines.length * 0.5;
+    if (lines.some((l) => l.includes("\t"))) return true;
+    return lines.length >= 3;
   }, []);
 
-  const handlePaste = useCallback(
-    (e: ClipboardEvent<HTMLTextAreaElement>) => {
-      if (!onPasteDetected) return;
-      const text = e.clipboardData.getData("text/plain");
-      if (text && isTSV(text)) {
+  useEffect(() => {
+    if (!onPasteDetected) return;
+    const callback = onPasteDetected;
+
+    function handleGlobalPaste(e: globalThis.ClipboardEvent) {
+      const text = e.clipboardData?.getData("text/plain");
+      if (text && isTabular(text)) {
         e.preventDefault();
-        onPasteDetected(text);
+        callback(text);
       }
-    },
-    [onPasteDetected, isTSV],
-  );
+    }
+
+    document.addEventListener("paste", handleGlobalPaste, true);
+    return () => document.removeEventListener("paste", handleGlobalPaste, true);
+  }, [onPasteDetected, isTabular]);
 
   const hasStreaming = messages.some((m) => m.isStreaming);
   const hasActiveToolCalls = messages.some(
@@ -109,7 +115,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
 
   return (
     <div
-      className="flex h-full flex-col"
+      className="flex flex-1 min-h-0 flex-col"
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
@@ -123,7 +129,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
               </svg>
             </div>
-            <h3 className="text-sm font-semibold text-kv-gray-800">Vložte poptávku</h3>
+            <h3 className="text-sm font-bold text-kv-gray-800">Vložte poptávku</h3>
             <p className="mt-1.5 text-xs text-kv-gray-400 max-w-[260px] leading-relaxed">
               Zkopírujte text z e-mailu, vložte tabulku z Excelu, nebo přetáhněte obrázek či PDF.
             </p>
@@ -138,7 +144,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
             <div
               className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
                 msg.role === "user"
-                  ? "bg-kv-red text-white rounded-br-md"
+                  ? "bg-kv-navy text-white rounded-br-md"
                   : msg.role === "system"
                     ? "bg-kv-gray-100 text-kv-gray-500 italic text-xs"
                     : "bg-kv-gray-100 text-kv-gray-800 rounded-bl-md"
@@ -174,6 +180,9 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Debug slot (inline, between messages and input) */}
+      {debugSlot}
+
       {/* Drag overlay */}
       {dragOver && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-kv-red/5 border-2 border-dashed border-kv-red/30 rounded-lg m-2">
@@ -182,7 +191,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
       )}
 
       {/* Input area */}
-      <div className="border-t border-kv-gray-200 p-3">
+      <div className="border-t border-kv-gray-200 bg-white p-3">
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           {/* File upload button */}
           <button
@@ -208,7 +217,6 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onPaste={handlePaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -218,14 +226,14 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onFileUpload,
             disabled={isProcessing}
             placeholder="Vložte poptávku nebo napište dotaz…"
             rows={1}
-            className="min-h-[40px] max-h-[120px] flex-1 resize-none rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-2.5 text-sm text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10 disabled:opacity-50"
+            className="min-h-[40px] max-h-[120px] flex-1 resize-none rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-2.5 text-sm text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-navy/30 focus:bg-white focus:ring-2 focus:ring-kv-navy/10 disabled:opacity-50"
           />
 
           {/* Send button */}
           <button
             type="submit"
             disabled={isProcessing || !input.trim()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-kv-red text-white transition-all hover:bg-kv-red-dark active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-kv-red text-white transition-all hover:bg-kv-red-dark active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-red-100"
           >
             <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />

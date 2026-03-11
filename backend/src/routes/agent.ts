@@ -2,15 +2,10 @@ import { Hono } from "hono";
 import { streamText } from "hono/streaming";
 import { run } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
-import { searchAgent, semanticSearchAgent, parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
-import { searchProductsFulltext, type ProductResult } from "../services/search.js";
-import { fetchProductsBySkus, slim } from "./agentHelpers.js";
-
-const SEARCH_ITEM_PROMPT = `Najdi v katalogu produkt odpovídající tomuto názvu z poptávky:
-
-"{ITEM_NAME}"
-
-Použij search_products a vrať JSON výsledek.`;
+import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
+import { searchProductsFulltext } from "../services/search.js";
+import { searchPipelineForItem, type PipelineResult, type PipelineDebugFn } from "../services/searchPipeline.js";
+import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 
 const agent = new Hono();
 
@@ -18,25 +13,6 @@ interface ParsedItem {
   name: string;
   unit: string | null;
   quantity: number | null;
-}
-
-interface AgentSearchResult {
-  matchType: "match" | "uncertain" | "multiple" | "alternative" | "not_found";
-  confidence: number;
-  selectedSku: string | null;
-  candidates: string[];
-  reasoning: string;
-}
-
-interface MatchResult {
-  position: number;
-  originalName: string;
-  unit: string | null;
-  quantity: number | null;
-  matchType: "match" | "uncertain" | "multiple" | "alternative" | "not_found";
-  confidence: number;
-  product: Partial<ProductResult> | null;
-  candidates: Array<Partial<ProductResult>>;
 }
 
 function sseEvent(type: string, data: unknown): string {
@@ -97,37 +73,68 @@ agent.post("/agent/search", authMiddleware, async (c) => {
   const CONCURRENCY = 30;
 
   return streamText(c, async (stream) => {
+    const sessionId = generateSessionId();
+    const batchT0 = Date.now();
+    const matchResults: PipelineResult[] = [];
+
+    const makePipelineDebug = (): PipelineDebugFn => {
+      return ({ position, step, data }) => {
+        stream
+          .write(
+            sseEvent("debug", {
+              ts: Date.now(),
+              type: "search_trace",
+              data: { event: step, position, ...(data as object) },
+            }),
+          )
+          .catch(() => {});
+      };
+    };
+
     try {
       await stream.write(sseEvent("status", { phase: "searching", total: items.length }));
+      stream
+        .write(
+          sseEvent("debug", {
+            ts: Date.now(),
+            type: "search_trace",
+            data: { event: "batch_start", sessionId, totalItems: items.length, mode: "pipeline" },
+          }),
+        )
+        .catch(() => {});
 
-      // Signal all items as "searching" upfront
       for (let i = 0; i < items.length; i++) {
         await stream.write(sseEvent("item_searching", { position: i, name: items[i].name }));
       }
 
-      // Process in parallel with controlled concurrency
       let cursor = 0;
+      const onDebug = makePipelineDebug();
+
       const runNext = async (): Promise<void> => {
         const idx = cursor++;
         if (idx >= items.length) return;
 
         const item = items[idx];
         try {
-          const matchResult = await searchAndMatch(item, idx);
-          await stream.write(sseEvent("item_matched", matchResult));
+          const result = await searchPipelineForItem(item, idx, onDebug);
+          matchResults.push(result);
+          await stream.write(sseEvent("item_matched", result));
         } catch {
-          await stream.write(
-            sseEvent("item_matched", {
-              position: idx,
-              originalName: item.name,
-              unit: item.unit,
-              quantity: item.quantity,
-              matchType: "not_found",
-              confidence: 0,
-              product: null,
-              candidates: [],
-            }),
-          );
+          const failResult: PipelineResult = {
+            position: idx,
+            originalName: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            matchType: "not_found",
+            confidence: 0,
+            product: null,
+            candidates: [],
+            reasoning: "Pipeline unexpectedly failed.",
+            reformulatedQuery: "",
+            pipelineMs: 0,
+          };
+          matchResults.push(failResult);
+          await stream.write(sseEvent("item_matched", failResult));
         }
 
         await runNext();
@@ -139,6 +146,11 @@ agent.post("/agent/search", authMiddleware, async (c) => {
       );
       await Promise.all(workers);
 
+      stream
+        .write(
+          sseEvent("debug", buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0)),
+        )
+        .catch(() => {});
       await stream.write(sseEvent("status", { phase: "review" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -187,123 +199,15 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
   }
 });
 
-/**
- * Search for a single product using the AI search agent.
- * The agent understands electrical terminology, reformulates queries,
- * and evaluates candidates from the DB search results.
- */
-const SEMANTIC_SEARCH_PROMPT = `Najdi v katalogu alternativní produkt k tomuto názvu z poptávky:
-
-"{ITEM_NAME}"
-
-Fulltext vyhledávání nenašlo přesnou shodu. Použij semantic_search k nalezení alternativy a vrať JSON výsledek.`;
-
-function parseAgentOutput(raw: string): AgentSearchResult | null {
-  try {
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
-}
-
-
-function buildMatchResult(
-  item: ParsedItem,
-  position: number,
-  agentResult: AgentSearchResult,
-  products: ProductResult[],
-): MatchResult {
-  const selectedProduct = agentResult.selectedSku
-    ? products.find((p) => p.sku === agentResult.selectedSku)
-    : null;
-
-  return {
-    position,
-    originalName: item.name,
-    unit: item.unit,
-    quantity: item.quantity,
-    matchType: agentResult.matchType ?? "not_found",
-    confidence: Math.min(100, Math.max(0, agentResult.confidence ?? 0)),
-    product: selectedProduct ? slim(selectedProduct) : null,
-    candidates: products.slice(0, 5).map(slim),
-  };
-}
-
-/**
- * Fulltext-only product search (Phase 1).
- * Semantic search is triggered separately by the user via /agent/search-semantic.
- */
-async function searchAndMatch(
-  item: ParsedItem,
-  position: number,
-): Promise<MatchResult> {
-  const fulltextPrompt = SEARCH_ITEM_PROMPT.replace("{ITEM_NAME}", item.name);
-  const fulltextResult = await run(searchAgent, fulltextPrompt);
-  const fulltextParsed = parseAgentOutput(fulltextResult.finalOutput ?? "");
-
-  if (!fulltextParsed || fulltextParsed.matchType === "not_found" || fulltextParsed.confidence === 0) {
-    return {
-      position,
-      originalName: item.name,
-      unit: item.unit,
-      quantity: item.quantity,
-      matchType: "not_found",
-      confidence: 0,
-      product: null,
-      candidates: [],
-    };
-  }
-
-  const allSkus = [...new Set([
-    ...(fulltextParsed.selectedSku ? [fulltextParsed.selectedSku] : []),
-    ...(fulltextParsed.candidates ?? []),
-  ])];
-  const products = await fetchProductsBySkus(allSkus);
-  return buildMatchResult(item, position, fulltextParsed, products);
-}
-
-/**
- * Semantic-only product search (Phase 2).
- * Called on demand for items that fulltext couldn't match.
- */
-async function searchAndMatchSemantic(
-  item: ParsedItem,
-  position: number,
-): Promise<MatchResult> {
-  try {
-    const semanticPrompt = SEMANTIC_SEARCH_PROMPT.replace("{ITEM_NAME}", item.name);
-    const semanticResult = await run(semanticSearchAgent, semanticPrompt);
-    const semanticParsed = parseAgentOutput(semanticResult.finalOutput ?? "");
-
-    if (semanticParsed && semanticParsed.matchType !== "not_found") {
-      const allSkus = [...new Set([
-        ...(semanticParsed.selectedSku ? [semanticParsed.selectedSku] : []),
-        ...(semanticParsed.candidates ?? []),
-      ])];
-      const products = await fetchProductsBySkus(allSkus);
-      return buildMatchResult(item, position, semanticParsed, products);
-    }
-  } catch {
-    // Semantic search failed
-  }
-
-  return {
-    position,
-    originalName: item.name,
-    unit: item.unit,
-    quantity: item.quantity,
-    matchType: "not_found",
-    confidence: 0,
-    product: null,
-    candidates: [],
-  };
-}
+// Old agent-based search functions removed.
+// Batch search now uses the deterministic pipeline (searchPipelineForItem)
+// which handles reformulation, dual semantic search, merge, AI evaluation,
+// and refinement in a single pass per item.
 
 /**
  * POST /agent/search-semantic
- * User-triggered Phase 2: semantic search for not_found items only.
- * Streams results via SSE as they're found.
+ * Re-runs the full search pipeline for not_found items (backward compat).
+ * The pipeline already includes semantic search, so this is equivalent to /agent/search.
  */
 agent.post("/agent/search-semantic", authMiddleware, async (c) => {
   const { items } = await c.req.json<{ items: Array<ParsedItem & { position: number }> }>();
@@ -320,6 +224,22 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
   const CONCURRENCY = 30;
 
   return streamText(c, async (stream) => {
+    const sessionId = generateSessionId();
+    const batchT0 = Date.now();
+    const matchResults: PipelineResult[] = [];
+
+    const onDebug: PipelineDebugFn = ({ position, step, data }) => {
+      stream
+        .write(
+          sseEvent("debug", {
+            ts: Date.now(),
+            type: "search_trace",
+            data: { event: step, position, ...(data as object) },
+          }),
+        )
+        .catch(() => {});
+    };
+
     try {
       await stream.write(sseEvent("status", { phase: "searching_semantic", total: items.length }));
 
@@ -334,21 +254,25 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
 
         const item = items[idx];
         try {
-          const matchResult = await searchAndMatchSemantic(item, item.position);
-          await stream.write(sseEvent("item_matched", matchResult));
+          const result = await searchPipelineForItem(item, item.position, onDebug);
+          matchResults.push(result);
+          await stream.write(sseEvent("item_matched", result));
         } catch {
-          await stream.write(
-            sseEvent("item_matched", {
-              position: item.position,
-              originalName: item.name,
-              unit: item.unit,
-              quantity: item.quantity,
-              matchType: "not_found",
-              confidence: 0,
-              product: null,
-              candidates: [],
-            }),
-          );
+          const failResult: PipelineResult = {
+            position: item.position,
+            originalName: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            matchType: "not_found",
+            confidence: 0,
+            product: null,
+            candidates: [],
+            reasoning: "Pipeline failed.",
+            reformulatedQuery: "",
+            pipelineMs: 0,
+          };
+          matchResults.push(failResult);
+          await stream.write(sseEvent("item_matched", failResult));
         }
 
         await runNext();
@@ -360,6 +284,11 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
       );
       await Promise.all(workers);
 
+      stream
+        .write(
+          sseEvent("debug", buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0)),
+        )
+        .catch(() => {});
       await stream.write(sseEvent("status", { phase: "review" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -396,6 +325,8 @@ const ACTION_TOOL_NAMES = new Set([
   "replace_product_in_offer",
   "remove_item_from_offer",
   "parse_items_from_text",
+  "process_items",
+  "update_offer_header",
 ]);
 
 /**
@@ -443,6 +374,12 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
           await safeWrite(sseEvent("action", entry.data));
         } else if (entry.type === "tool_activity") {
           await safeWrite(sseEvent("tool_activity", { tool: entry.tool, ...(entry.data as object) }));
+        } else if (entry.type === "item_searching") {
+          await safeWrite(sseEvent("item_searching", entry.data));
+        } else if (entry.type === "item_matched") {
+          await safeWrite(sseEvent("item_matched", entry.data));
+        } else if (entry.type === "status") {
+          await safeWrite(sseEvent("status", entry.data));
         } else {
           await safeWrite(sseEvent("debug", { ts: Date.now(), ...entry }));
         }

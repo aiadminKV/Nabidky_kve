@@ -8,12 +8,15 @@ import { PasteConfirmModal } from "@/components/PasteConfirmModal";
 import { ParsedItemsTable } from "@/components/ParsedItemsTable";
 import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
+import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
+import { parsePastedText } from "@/lib/parsePaste";
 import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx } from "@/lib/api";
 import type {
   ChatMessage,
   DebugEntry,
   OfferAction,
+  OfferHeader,
   OfferItem,
   OfferItemSummary,
   OfferPhase,
@@ -38,7 +41,17 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
+  const [offerHeader, setOfferHeader] = useState<OfferHeader>({
+    customerIco: "",
+    customerName: "",
+    deliveryDate: "",
+    offerName: "",
+    phone: "",
+    email: "",
+    specialAction: "",
+    branch: "",
+    deliveryAddress: "",
+  });
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -86,178 +99,19 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }, []);
 
   const TOOL_LABELS: Record<string, string> = useMemo(() => ({
-    search_products: "Hledání produktů",
-    semantic_search: "Sémantické vyhledávání",
+    search_product: "AI vyhledávání",
     get_category_info: "Zjišťování kategorií",
     add_item_to_offer: "Přidání položky",
     replace_product_in_offer: "Záměna produktu",
     remove_item_from_offer: "Odstranění položky",
     parse_items_from_text: "Zpracování položek",
+    process_items: "Hromadné zpracování",
+    update_offer_header: "Aktualizace hlavičky",
   }), []);
 
   // ──────────────────────────────────────────────────────────
-  // TSV parsing utilities
+  // TSV parsing (fixed format: Název \t MJ \t Množství)
   // ──────────────────────────────────────────────────────────
-
-  const detectHeader = useCallback((firstRow: string[]): string[] | null => {
-    const KNOWN_HEADERS = new Set([
-      "název", "nazev", "name", "položka", "polozka", "popis", "produkt", "materiál", "material",
-      "množství", "mnozstvi", "množstvo", "mnozstvo", "qty", "quantity", "počet", "pocet", "ks",
-      "jednotka", "mj", "unit", "j.",
-      "sku", "kód", "kod", "code", "číslo", "cislo", "artikl",
-      "cena", "price", "cena/ks", "cena/mj",
-      "výrobce", "vyrobce", "manufacturer", "brand", "značka", "znacka",
-      "kategorie", "category", "skupina",
-      "poznámka", "poznamka", "note", "notes", "komentář", "komentar",
-      "objednávka", "objednavka", "typ", "type",
-      "ean", "katalog", "catalog", "obj. č.", "obj. c.", "obj.č.", "obj.c.",
-    ]);
-
-    const lowerCols = firstRow.map((c) => c.toLowerCase().trim());
-    const matchCount = lowerCols.filter((c) => KNOWN_HEADERS.has(c)).length;
-    const numericCount = firstRow.filter((c) => /^\d+([.,]\d+)?$/.test(c.trim())).length;
-
-    if (matchCount >= 1 && numericCount <= 1) return firstRow;
-    if (matchCount >= 2) return firstRow;
-    return null;
-  }, []);
-
-  const classifyColumns = useCallback((headers: string[]): {
-    nameIdx: number;
-    unitIdx: number | null;
-    quantityIdx: number | null;
-    extraIdxMap: Array<{ idx: number; label: string }>;
-  } => {
-    const NAME_PATTERNS = /^(název|nazev|name|položka|polozka|popis|produkt|materiál|material)$/i;
-    const UNIT_PATTERNS = /^(jednotka|mj|unit|j\.)$/i;
-    const QTY_PATTERNS = /^(množství|mnozstvi|množstvo|mnozstvo|qty|quantity|počet|pocet|ks)$/i;
-
-    let nameIdx = -1;
-    let unitIdx: number | null = null;
-    let quantityIdx: number | null = null;
-    const extraIdxMap: Array<{ idx: number; label: string }> = [];
-
-    for (let i = 0; i < headers.length; i++) {
-      const h = headers[i].trim();
-      const lower = h.toLowerCase();
-      if (nameIdx === -1 && NAME_PATTERNS.test(lower)) {
-        nameIdx = i;
-      } else if (unitIdx === null && UNIT_PATTERNS.test(lower)) {
-        unitIdx = i;
-      } else if (quantityIdx === null && QTY_PATTERNS.test(lower)) {
-        quantityIdx = i;
-      } else if (h) {
-        extraIdxMap.push({ idx: i, label: h });
-      }
-    }
-
-    if (nameIdx === -1) {
-      nameIdx = 0;
-      const dupIdx = extraIdxMap.findIndex((e) => e.idx === 0);
-      if (dupIdx !== -1) extraIdxMap.splice(dupIdx, 1);
-    }
-
-    return { nameIdx, unitIdx, quantityIdx, extraIdxMap };
-  }, []);
-
-  const parseTSVLocally = useCallback((text: string): ParsedItem[] => {
-    const lines = text.split("\n").filter((l) => l.trim());
-    if (lines.length === 0) return [];
-
-    const items: ParsedItem[] = [];
-    const firstRowCols = lines[0].split("\t").map((c) => c.trim());
-    const headers = detectHeader(firstRowCols);
-
-    if (headers) {
-      const { nameIdx, unitIdx, quantityIdx, extraIdxMap } = classifyColumns(headers);
-      const dataLines = lines.slice(1);
-
-      for (const line of dataLines) {
-        const cols = line.split("\t").map((c) => c.trim());
-        const name = cols[nameIdx] ?? "";
-        if (!name.trim()) continue;
-
-        const unitVal = unitIdx !== null ? (cols[unitIdx] || null) : null;
-        let quantityVal: number | null = null;
-        if (quantityIdx !== null && cols[quantityIdx]) {
-          const num = parseFloat(cols[quantityIdx].replace(",", "."));
-          quantityVal = isNaN(num) ? null : num;
-        }
-
-        const extra: Record<string, string> = {};
-        for (const { idx, label } of extraIdxMap) {
-          const val = cols[idx]?.trim();
-          if (val) extra[label] = val;
-        }
-
-        items.push({
-          id: `item_${++idCounter.current}`,
-          name: name.trim(),
-          unit: unitVal,
-          quantity: quantityVal,
-          ...(Object.keys(extra).length > 0 ? { extraColumns: extra } : {}),
-        });
-      }
-    } else {
-      for (const line of lines) {
-        const cols = line.split("\t").map((c) => c.trim());
-        if (cols.length === 0 || !cols[0]) continue;
-
-        let name = cols[0];
-        let unit: string | null = null;
-        let quantity: number | null = null;
-
-        if (cols.length >= 3) {
-          name = cols[0];
-          unit = cols[1] || null;
-          const num = parseFloat(cols[2].replace(",", "."));
-          quantity = isNaN(num) ? null : num;
-
-          const extra: Record<string, string> = {};
-          for (let i = 3; i < cols.length; i++) {
-            const val = cols[i]?.trim();
-            if (val) extra[`Sloupec ${i + 1}`] = val;
-          }
-
-          if (name.trim()) {
-            items.push({
-              id: `item_${++idCounter.current}`,
-              name: name.trim(),
-              unit,
-              quantity,
-              ...(Object.keys(extra).length > 0 ? { extraColumns: extra } : {}),
-            });
-            continue;
-          }
-        } else if (cols.length === 2) {
-          const num = parseFloat(cols[1].replace(",", "."));
-          if (!isNaN(num)) {
-            quantity = num;
-          } else {
-            unit = cols[1];
-          }
-        }
-
-        const firstNum = parseFloat(cols[0].replace(",", "."));
-        if (!isNaN(firstNum) && cols.length > 1 && isNaN(parseFloat(cols[1].replace(",", ".")))) {
-          quantity = firstNum;
-          name = cols[1];
-          if (cols.length >= 3) unit = cols[2] || null;
-        }
-
-        if (name.trim()) {
-          items.push({
-            id: `item_${++idCounter.current}`,
-            name: name.trim(),
-            unit,
-            quantity,
-          });
-        }
-      }
-    }
-
-    return items;
-  }, [detectHeader, classifyColumns]);
 
   // ──────────────────────────────────────────────────────────
   // Build compact offer context for the agent
@@ -292,6 +146,22 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           setPhase("parsed");
           break;
         }
+        case "process_items": {
+          const emptyItems: OfferItem[] = action.items.map((item, i) => ({
+            position: i,
+            originalName: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            matchType: "not_found" as const,
+            confidence: 0,
+            product: null,
+            candidates: [],
+          }));
+          setOfferItems(emptyItems);
+          setSearchingSet(new Set(action.items.map((_, i) => i)));
+          setPhase("processing");
+          break;
+        }
         case "add_item": {
           const product = action.product ?? null;
           setOfferItems((prev) => {
@@ -303,10 +173,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
               originalName: action.name,
               unit: product?.unit ?? null,
               quantity: action.quantity,
-              matchType: product ? "match" : "not_found",
-              confidence: product ? 85 : 0,
+              matchType: action.matchType ?? (product ? "match" : "not_found"),
+              confidence: action.confidence ?? (product ? 85 : 0),
               product,
-              candidates: [],
+              candidates: (action.candidates ?? []) as Product[],
+              reasoning: action.reasoning,
             };
             return [...prev, newItem];
           });
@@ -324,8 +195,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
                 ? {
                     ...i,
                     product,
-                    matchType: product ? ("match" as const) : i.matchType,
-                    confidence: product ? 100 : i.confidence,
+                    candidates: (action.candidates as Product[] | undefined)?.length
+                      ? (action.candidates as Product[])
+                      : i.candidates,
+                    matchType: action.matchType ?? (product ? ("match" as const) : i.matchType),
+                    confidence: action.confidence ?? (product ? 100 : i.confidence),
                   }
                 : i,
             ),
@@ -337,6 +211,10 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             const filtered = prev.filter((i) => i.position !== action.position);
             return filtered.map((item, idx) => ({ ...item, position: idx }));
           });
+          break;
+        }
+        case "update_header": {
+          setOfferHeader((prev) => ({ ...prev, ...action.fields }));
           break;
         }
       }
@@ -415,6 +293,27 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             setDebugLog((prev) => [...prev, d]);
           } else if (event.type === "action") {
             processAction(event.data as unknown as OfferAction);
+          } else if (event.type === "item_searching") {
+            const pos = event.data.position as number;
+            setSearchingSet((prev) => new Set(prev).add(pos));
+          } else if (event.type === "item_matched") {
+            const data = event.data as unknown as OfferItem;
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(data.position);
+              return next;
+            });
+            flashPosition(data.position);
+            setOfferItems((prev) =>
+              prev.map((item) =>
+                item.position === data.position
+                  ? { ...item, ...data, extraColumns: item.extraColumns }
+                  : item,
+              ),
+            );
+          } else if (event.type === "status" && event.data.phase === "review") {
+            setSearchingSet(new Set());
+            setPhase("review");
           } else if (event.type === "error") {
             addMessage("system", `Chyba: ${event.data.message}`);
           }
@@ -436,7 +335,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         );
       }
     },
-    [addMessage, getToken, buildOfferSummary, processAction, TOOL_LABELS],
+    [addMessage, getToken, buildOfferSummary, processAction, TOOL_LABELS, flashPosition],
   );
 
   // ──────────────────────────────────────────────────────────
@@ -449,7 +348,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
 
   const handlePasteImport = useCallback(() => {
     if (!pendingPaste) return;
-    const items = parseTSVLocally(pendingPaste);
+    const items = parsePastedText(pendingPaste);
     if (phase === "review" && offerItems.length > 0) {
       const maxPos = Math.max(...offerItems.map((i) => i.position));
       const newOfferItems: OfferItem[] = items.map((item, i) => ({
@@ -473,7 +372,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       addMessage("system", `Rozpoznáno ${items.length} položek z tabulky. Zkontrolujte a klikněte Zpracovat.`);
     }
     setPendingPaste(null);
-  }, [pendingPaste, parseTSVLocally, phase, offerItems, addMessage]);
+  }, [pendingPaste, phase, offerItems, addMessage]);
 
   const handlePasteSendAsMessage = useCallback(() => {
     if (!pendingPaste) return;
@@ -539,6 +438,9 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
                 : item,
             ),
           );
+        } else if (event.type === "debug") {
+          const d = event.data as unknown as DebugEntry;
+          setDebugLog((prev) => [...prev, d]);
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           setPhase("review");
@@ -597,6 +499,9 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
                 : item,
             ),
           );
+        } else if (event.type === "debug") {
+          const d = event.data as unknown as DebugEntry;
+          setDebugLog((prev) => [...prev, d]);
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           addMessage("system", "Sémantické vyhledávání dokončeno.");
@@ -659,18 +564,16 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       const exportItems = offerItems.map((item) => ({
         originalName: item.originalName,
         quantity: item.quantity,
+        unit: item.unit,
         sku: item.product?.sku ?? null,
         productName: item.product?.name ?? null,
         manufacturerCode: item.product?.manufacturer_code ?? null,
         manufacturer: item.product?.manufacturer ?? null,
         matchType: item.matchType,
         confidence: item.confidence,
-        ...(item.extraColumns && Object.keys(item.extraColumns).length > 0
-          ? { extraColumns: item.extraColumns }
-          : {}),
       }));
 
-      const blob = await downloadXlsx(exportItems, token);
+      const blob = await downloadXlsx(exportItems, offerHeader, token);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -680,7 +583,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     } catch {
       addMessage("system", "Export se nezdařil.");
     }
-  }, [offerItems, getToken, addMessage]);
+  }, [offerItems, offerHeader, getToken, addMessage]);
 
   const handleReset = useCallback(() => {
     setPhase("idle");
@@ -757,11 +660,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-kv-gray-50">
+    <div className="flex h-screen flex-col">
       <Header email={email} isAdmin={isAdmin} />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left panel – Chat/Input */}
+        {/* Left panel – Chat + Debug */}
         <div className="relative flex w-[420px] shrink-0 flex-col border-r border-kv-gray-200 bg-white">
           <ChatPanel
             messages={messages}
@@ -769,40 +672,18 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             onSendMessage={handleSendMessage}
             onFileUpload={handleFileUpload}
             onPasteDetected={handlePasteDetected}
+            debugSlot={
+              <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />
+            }
           />
         </div>
 
         {/* Right panel – Context-dependent */}
         <div className="flex flex-1 flex-col bg-white">
+          <OfferHeaderForm header={offerHeader} onChange={setOfferHeader} />
           {renderRightPanel()}
         </div>
       </div>
-
-      {/* Agent Debug Panel (bottom drawer) */}
-      {showDebug && (
-        <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />
-      )}
-
-      {/* Debug toggle button */}
-      <button
-        onClick={() => setShowDebug((v) => !v)}
-        className={`fixed bottom-4 right-4 z-50 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono shadow-lg transition-all ${
-          showDebug
-            ? "bg-green-500 text-black hover:bg-green-400"
-            : "bg-[#161b22] text-green-400 border border-[#30363d] hover:bg-[#1c2128]"
-        }`}
-        title={showDebug ? "Skrýt debug panel" : "Zobrazit debug panel"}
-      >
-        <span className="text-[10px]">{showDebug ? "▼" : "▲"}</span>
-        <span>DEBUG</span>
-        {debugLog.length > 0 && (
-          <span className={`rounded-full px-1.5 py-0 text-[10px] font-bold ${
-            showDebug ? "bg-black/20 text-black" : "bg-green-400/20 text-green-400"
-          }`}>
-            {debugLog.length}
-          </span>
-        )}
-      </button>
 
       {/* Review modal */}
       {reviewItem && (

@@ -1,4 +1,4 @@
-import type { SSEEvent, Product, PricelistUpload, OfferItemSummary } from "./types";
+import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader } from "./types";
 
 /** Backend URL — direct from browser, no proxy */
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -108,6 +108,7 @@ export async function searchProducts(
 /** Download XLSX export (REST) */
 export async function downloadXlsx(
   items: Array<Record<string, unknown>>,
+  header: OfferHeader,
   token: string,
 ): Promise<Blob> {
   const res = await fetch(`${BACKEND_URL}/export/xlsx`, {
@@ -116,7 +117,7 @@ export async function downloadXlsx(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items, header }),
   });
   if (!res.ok) throw new Error("Export failed");
   return res.blob();
@@ -445,4 +446,24 @@ export async function updateProfile(
   });
   if (!res.ok) throw new Error("Failed to update profile");
   return res.json();
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+  token: string,
+): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/profile/change-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Nepodařilo se změnit heslo.");
+  }
 }

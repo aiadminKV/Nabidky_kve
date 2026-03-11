@@ -1,151 +1,202 @@
 import { Hono } from "hono";
 import ExcelJS from "exceljs";
 import { authMiddleware } from "../middleware/auth.js";
-import { getUserClient } from "../services/supabase.js";
 
 const exportRouter = new Hono();
+
+interface OfferHeader {
+  customerIco: string;
+  customerName: string;
+  deliveryDate: string;
+  offerName: string;
+  phone: string;
+  email: string;
+  specialAction: string;
+  branch: string;
+  deliveryAddress: string;
+}
 
 interface ExportItem {
   originalName: string;
   quantity: number | null;
+  unit: string | null;
   sku: string | null;
   productName: string | null;
   manufacturerCode: string | null;
   manufacturer: string | null;
   matchType: string;
   confidence: number;
-  extraColumns?: Record<string, string>;
+}
+
+const HEADER_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FF1E40AF" },
+};
+
+const HEADER_FONT: Partial<ExcelJS.Font> = {
+  bold: true,
+  color: { argb: "FFFFFFFF" },
+  size: 10,
+};
+
+const CELL_FONT: Partial<ExcelJS.Font> = { size: 10 };
+
+function applyHeaderStyle(row: ExcelJS.Row, colCount: number) {
+  row.font = HEADER_FONT;
+  row.fill = HEADER_FILL;
+  row.alignment = { vertical: "middle" };
+  for (let c = 1; c <= colCount; c++) {
+    const cell = row.getCell(c);
+    cell.font = HEADER_FONT;
+    cell.fill = HEADER_FILL;
+    cell.border = {
+      bottom: { style: "thin", color: { argb: "FF000000" } },
+    };
+  }
 }
 
 /**
  * POST /export/xlsx
- * Generate an XLSX file for SAP import.
- * Key columns: product code (SKU) + quantity.
+ * Generate XLSX matching the KV Elektro import template.
+ * Sheet 1: Customer header + item rows.
+ * Sheet 2: Field descriptions.
  */
 exportRouter.post("/export/xlsx", authMiddleware, async (c) => {
-  const { offerId, items } = await c.req.json<{
-    offerId?: string;
-    items?: ExportItem[];
+  const { header, items } = await c.req.json<{
+    header?: Partial<OfferHeader>;
+    items: ExportItem[];
   }>();
 
-  let exportItems: ExportItem[];
-
-  if (items) {
-    exportItems = items;
-  } else if (offerId) {
-    const token = c.req.header("Authorization")?.slice(7) ?? "";
-    const supabase = getUserClient(token);
-
-    const { data, error } = await supabase
-      .from("offer_items")
-      .select(`
-        original_name,
-        quantity,
-        matched_product_id,
-        match_type,
-        confidence,
-        products:matched_product_id (sku, name, manufacturer_code, manufacturer)
-      `)
-      .eq("offer_id", offerId)
-      .order("position");
-
-    if (error) {
-      return c.json({ error: `Failed to load offer items: ${error.message}` }, 500);
-    }
-
-    exportItems = (data ?? []).map((item) => {
-      const product = item.products as unknown as Record<string, string> | null;
-      return {
-        originalName: item.original_name,
-        quantity: item.quantity,
-        sku: product?.sku ?? null,
-        productName: product?.name ?? null,
-        manufacturerCode: product?.manufacturer_code ?? null,
-        manufacturer: product?.manufacturer ?? null,
-        matchType: item.match_type ?? "not_found",
-        confidence: item.confidence ?? 0,
-      };
-    });
-  } else {
-    return c.json({ error: "Either offerId or items must be provided" }, 400);
+  if (!items?.length) {
+    return c.json({ error: "Items are required" }, 400);
   }
 
-  const extraKeys = new Set<string>();
-  for (const item of exportItems) {
-    if (item.extraColumns) {
-      for (const key of Object.keys(item.extraColumns)) {
-        extraKeys.add(key);
-      }
-    }
-  }
-  const extraKeysList = Array.from(extraKeys);
+  const h: OfferHeader = {
+    customerIco: header?.customerIco ?? "",
+    customerName: header?.customerName ?? "",
+    deliveryDate: header?.deliveryDate ?? "",
+    offerName: header?.offerName ?? "",
+    phone: header?.phone ?? "",
+    email: header?.email ?? "",
+    specialAction: header?.specialAction ?? "",
+    branch: header?.branch ?? "",
+    deliveryAddress: header?.deliveryAddress ?? "",
+  };
 
   const workbook = new ExcelJS.Workbook();
   workbook.created = new Date();
   workbook.creator = "KV Elektro – Správce nabídek";
 
-  const sheet = workbook.addWorksheet("SAP Import");
+  // ── Sheet 1: Data ──
+  const dataSheet = workbook.addWorksheet("Import");
 
-  const baseColumns: Partial<ExcelJS.Column>[] = [
-    { header: "Kód produktu (SKU)", key: "sku", width: 20 },
-    { header: "Množství", key: "quantity", width: 12 },
-    { header: "Název z poptávky", key: "originalName", width: 40 },
+  // Customer header section
+  const customerHeaders = [
+    "ID", "IČ", "Název", "termín dodání",
+    "Název zakázky / Číslo objednávky", "tel", "email",
+    "spec.akce", "pobočka", "adresa dodání",
   ];
+  const customerHeaderRow = dataSheet.addRow(customerHeaders);
+  applyHeaderStyle(customerHeaderRow, customerHeaders.length);
 
-  const extraColumnDefs: Partial<ExcelJS.Column>[] = extraKeysList.map((key) => ({
-    header: key,
-    key: `extra_${key}`,
-    width: Math.max(15, Math.min(key.length + 4, 30)),
-  }));
+  const customerDataRow = dataSheet.addRow([
+    "", // ID — auto-generated by SAP
+    h.customerIco,
+    h.customerName,
+    h.deliveryDate,
+    h.offerName,
+    h.phone,
+    h.email,
+    h.specialAction,
+    h.branch,
+    h.deliveryAddress,
+  ]);
+  customerDataRow.font = CELL_FONT;
 
-  const tailColumns: Partial<ExcelJS.Column>[] = [
-    { header: "Nalezený produkt", key: "productName", width: 40 },
-    { header: "Kód výrobce", key: "manufacturerCode", width: 25 },
-    { header: "Výrobce", key: "manufacturer", width: 20 },
-    { header: "Typ shody", key: "matchType", width: 15 },
-    { header: "Jistota (%)", key: "confidence", width: 12 },
-  ];
+  // Empty separator row
+  dataSheet.addRow([]);
 
-  sheet.columns = [...baseColumns, ...extraColumnDefs, ...tailColumns];
+  // Item header section
+  const itemHeaders = ["Artikl", "prodID", "Název", "Množství", "MJ"];
+  const itemHeaderRow = dataSheet.addRow(itemHeaders);
+  applyHeaderStyle(itemHeaderRow, itemHeaders.length);
 
-  const headerRow = sheet.getRow(1);
-  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  headerRow.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1E40AF" },
-  };
-  headerRow.alignment = { vertical: "middle" };
-
-  for (const item of exportItems) {
-    const rowData: Record<string, unknown> = {
-      sku: item.sku ?? "",
-      quantity: item.quantity,
-      originalName: item.originalName,
-      productName: item.productName ?? "",
-      manufacturerCode: item.manufacturerCode ?? "",
-      manufacturer: item.manufacturer ?? "",
-      matchType: translateMatchType(item.matchType),
-      confidence: item.confidence,
-    };
-
-    for (const key of extraKeysList) {
-      rowData[`extra_${key}`] = item.extraColumns?.[key] ?? "";
-    }
-
-    const row = sheet.addRow(rowData);
+  // Item data rows
+  for (const item of items) {
+    const row = dataSheet.addRow([
+      item.sku ?? "",
+      item.manufacturerCode ?? "",
+      item.originalName,
+      item.quantity,
+      item.unit ?? "ks",
+    ]);
+    row.font = CELL_FONT;
 
     const fillColor = getMatchColor(item.matchType);
     if (fillColor) {
-      row.eachCell((cell) => {
-        cell.fill = {
+      for (let c = 1; c <= 5; c++) {
+        row.getCell(c).fill = {
           type: "pattern",
           pattern: "solid",
           fgColor: { argb: fillColor },
         };
-      });
+      }
     }
   }
+
+  // Column widths
+  dataSheet.getColumn(1).width = 14;
+  dataSheet.getColumn(2).width = 18;
+  dataSheet.getColumn(3).width = 45;
+  dataSheet.getColumn(4).width = 12;
+  dataSheet.getColumn(5).width = 8;
+  dataSheet.getColumn(6).width = 14;
+  dataSheet.getColumn(7).width = 25;
+  dataSheet.getColumn(8).width = 14;
+  dataSheet.getColumn(9).width = 14;
+  dataSheet.getColumn(10).width = 30;
+
+  // ── Sheet 2: Popisky ──
+  const descSheet = workbook.addWorksheet("Popisky");
+
+  const descHeaderRow = descSheet.addRow(["Pole", "Popis", "Povinné"]);
+  applyHeaderStyle(descHeaderRow, 3);
+
+  const descriptions = [
+    ["", "DATA HLAVIČKY", ""],
+    ["IČ", "CustomerID / IČ zákazníka", "ano"],
+    ["termín dodání", "Datum dodání objednávky", "ano"],
+    ["Název zakázky", "Název nabídky / akce / číslo objednávky", "ano"],
+    ["tel", "Kontaktní telefon", "volitelné"],
+    ["email", "Kontaktní email", "volitelné"],
+    ["spec.akce", "Kód speciální akce", "volitelné"],
+    ["pobočka", "Pobočka pro odběr", "volitelné"],
+    ["adresa dodání", "Adresa pro doručení zásilky", "volitelné"],
+    ["", "", ""],
+    ["", "DATA POLOŽEK", ""],
+    ["Artikl", "SKU kód produktu z katalogu KV Elektro", "ano"],
+    ["prodID", "Kód výrobce (manufacturer code)", "volitelné"],
+    ["Název", "Název produktu z poptávky", "ano"],
+    ["Množství", "Objednané množství", "ano"],
+    ["MJ", "Měrná jednotka (ks, m, bal…) — pokud chybí, přebere se z katalogu", "volitelné"],
+    ["", "", ""],
+    ["", "POZNÁMKY", ""],
+    ["TAN", "Položka s vyplněným Artikl — standardní objednávka", ""],
+    ["TATX", "Položka BEZ Artiklu — textová poznámka s množstvím", ""],
+  ];
+
+  for (const row of descriptions) {
+    const r = descSheet.addRow(row);
+    r.font = CELL_FONT;
+    if (row[0] === "" && row[1].startsWith("DATA") || row[1] === "POZNÁMKY") {
+      r.font = { ...CELL_FONT, bold: true };
+    }
+  }
+
+  descSheet.getColumn(1).width = 22;
+  descSheet.getColumn(2).width = 50;
+  descSheet.getColumn(3).width = 14;
 
   const buffer = await workbook.xlsx.writeBuffer();
 
@@ -154,19 +205,6 @@ exportRouter.post("/export/xlsx", authMiddleware, async (c) => {
 
   return c.body(buffer as ArrayBuffer);
 });
-
-function translateMatchType(type: string): string {
-  const map: Record<string, string> = {
-    match: "Shoda",
-    uncertain: "Nejistá shoda",
-    multiple: "Více možností",
-    alternative: "Alternativa",
-    not_found: "Nenalezeno",
-    confirmed: "Potvrzeno",
-    skipped: "Přeskočeno",
-  };
-  return map[type] ?? type;
-}
 
 function getMatchColor(type: string): string | null {
   const map: Record<string, string> = {
