@@ -70,7 +70,7 @@ export function ParsedItemsTable({
   }, [items, onItemsChange]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Header bar */}
       <div className="flex items-center justify-between border-b border-kv-gray-200 bg-white px-5 py-3">
         <div className="flex items-center gap-3">
@@ -121,7 +121,7 @@ export function ParsedItemsTable({
       </div>
 
       {/* Editable table */}
-      <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto custom-scrollbar">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>

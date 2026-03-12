@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/Header";
 import { createClient } from "@/lib/supabase/client";
 import { listOffers, createOffer, deleteOffer, type OfferSummary } from "@/lib/api";
+
+const PAGE_SIZE = 20;
 
 interface OffersListClientProps {
   email: string;
@@ -17,6 +19,7 @@ const STATUS_LABELS: Record<string, string> = {
   searching: "Vyhledávání",
   review: "Ke kontrole",
   completed: "Dokončená",
+  exported: "Exportováno",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -25,18 +28,23 @@ const STATUS_COLORS: Record<string, string> = {
   searching: "bg-blue-50 text-blue-700",
   review: "bg-orange-50 text-orange-700",
   completed: "bg-green-50 text-green-700",
+  exported: "bg-emerald-50 text-emerald-700",
 };
 
 export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
   const router = useRouter();
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
   const supabase = useMemo(() => createClient(), []);
 
   const getToken = useCallback(async () => {
@@ -48,8 +56,9 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
     try {
       setLoading(true);
       const token = await getToken();
-      const data = await listOffers(token);
-      setOffers(data);
+      const result = await listOffers(token, { limit: PAGE_SIZE, offset: 0 });
+      setOffers(result.offers);
+      setTotal(result.total);
     } catch {
       // silent
     } finally {
@@ -60,6 +69,42 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
   useEffect(() => {
     loadOffers();
   }, [loadOffers]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      async (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+        if (loadingMoreRef.current) return;
+
+        const currentOffers = offers;
+        if (currentOffers.length === 0 || currentOffers.length >= total) return;
+
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+        try {
+          const token = await getToken();
+          const result = await listOffers(token, {
+            limit: PAGE_SIZE,
+            offset: currentOffers.length,
+          });
+          setOffers((prev) => [...prev, ...result.offers]);
+          setTotal(result.total);
+        } catch {
+          // silent
+        } finally {
+          loadingMoreRef.current = false;
+          setLoadingMore(false);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [offers, total, getToken]);
 
   const handleCreate = useCallback(async () => {
     if (!newTitle.trim() || creating) return;
@@ -84,6 +129,7 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
       const token = await getToken();
       await deleteOffer(deleteId, token);
       setOffers((prev) => prev.filter((o) => o.id !== deleteId));
+      setTotal((prev) => Math.max(0, prev - 1));
       setDeleteId(null);
     } catch {
       // silent
@@ -114,7 +160,7 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
             <div>
               <h2 className="text-xl font-black text-kv-navy uppercase tracking-tight">Nabídky</h2>
               <p className="mt-1 text-xs text-kv-gray-400 uppercase tracking-wider font-medium">
-                Spravujte své rozpracované i dokončené nabídky
+                Spravujte své nabídky
               </p>
             </div>
             <button
@@ -179,9 +225,21 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                       <h3 className="text-sm font-semibold text-kv-dark truncate">
                         {offer.title}
                       </h3>
-                      <p className="mt-0.5 text-xs text-kv-gray-400">
-                        {formatDate(offer.updated_at)}
-                      </p>
+                      <div className="mt-0.5 flex items-center gap-2 text-xs text-kv-gray-400">
+                        <span>{formatDate(offer.updated_at)}</span>
+                        {offer.header?.customerName && (
+                          <>
+                            <span className="text-kv-gray-200">·</span>
+                            <span className="truncate">{offer.header.customerName}</span>
+                          </>
+                        )}
+                        {offer.header?.customerIco && (
+                          <>
+                            <span className="text-kv-gray-200">·</span>
+                            <span className="tabular-nums">IČ {offer.header.customerIco}</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -204,6 +262,20 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                   </div>
                 </div>
               ))}
+
+              <div ref={sentinelRef} className="h-4" />
+
+              {loadingMore && (
+                <div className="flex items-center justify-center py-6">
+                  <div className="flex items-center gap-3 text-kv-gray-400">
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-xs">Načítám další…</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

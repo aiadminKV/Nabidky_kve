@@ -23,6 +23,20 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
   const [isSearching, setIsSearching] = useState(false);
   const [manualSku, setManualSku] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(item.product);
+  const [wasDeselected, setWasDeselected] = useState(false);
+
+  const [editedName, setEditedName] = useState(item.originalName);
+  const [editedQuantity, setEditedQuantity] = useState<string>(
+    item.quantity != null ? String(item.quantity) : "",
+  );
+  const [editedUnit, setEditedUnit] = useState(item.unit ?? "");
+
+  const buildEditedItem = useCallback((): OfferItem => ({
+    ...item,
+    originalName: editedName.trim() || item.originalName,
+    quantity: editedQuantity.trim() ? Number(editedQuantity) : item.quantity,
+    unit: editedUnit.trim() || item.unit,
+  }), [item, editedName, editedQuantity, editedUnit]);
 
   const debouncedQuery = useDebouncedValue(searchQuery, DEBOUNCE_MS);
 
@@ -78,19 +92,32 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
           </button>
         </div>
 
-        {/* Original item info */}
+        {/* Editable original item info */}
         <div className="border-b border-kv-gray-100 bg-kv-gray-50 px-6 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-semibold text-kv-navy">Z poptávky</span>
-              <p className="text-sm text-kv-dark">{item.originalName}</p>
-            </div>
-            <div className="flex items-center gap-3">
-              {item.quantity && (
-                <span className="text-sm text-kv-gray-500 tabular-nums">{item.quantity} {item.unit ?? "ks"}</span>
-              )}
-              <StatusBadge type={item.matchType} confidence={item.confidence} />
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-xs font-semibold text-kv-navy">Z poptávky</span>
+            <input
+              value={editedName}
+              onChange={(e) => setEditedName(e.target.value)}
+              placeholder="Název položky"
+              className="min-w-0 flex-1 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+            />
+            <input
+              value={editedQuantity}
+              onChange={(e) => setEditedQuantity(e.target.value)}
+              type="number"
+              min={0}
+              step="any"
+              placeholder="Množ."
+              className="w-16 shrink-0 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark tabular-nums outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+            />
+            <input
+              value={editedUnit}
+              onChange={(e) => setEditedUnit(e.target.value)}
+              placeholder="MJ"
+              className="w-14 shrink-0 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+            />
+            <StatusBadge type={item.matchType} confidence={item.confidence} />
           </div>
         </div>
 
@@ -142,9 +169,20 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
           </p>
           <div className="space-y-1.5">
             {displayCandidates.map((product, idx) => (
-              <button
+              <div
                 key={product.sku + idx}
-                onClick={() => setSelectedProduct(product)}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectedProduct?.sku === product.sku}
+                onClick={() => { setSelectedProduct(product); setWasDeselected(false); }}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedProduct(product);
+                    setWasDeselected(false);
+                  }
+                }}
                 className={`w-full rounded-xl border px-4 py-3 text-left transition-all ${
                   selectedProduct?.sku === product.sku
                     ? "border-kv-navy bg-kv-navy/5 ring-1 ring-kv-navy/20"
@@ -168,14 +206,23 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
                     </div>
                   </div>
                   {selectedProduct?.sku === product.sku && (
-                    <div className="ml-3 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-kv-navy text-white">
+                    <button
+                      type="button"
+                      title="Zrušit výběr"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedProduct(null);
+                        setWasDeselected(true);
+                      }}
+                      className="ml-3 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-kv-navy text-white transition-colors hover:bg-kv-red"
+                    >
                       <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                       </svg>
-                    </div>
+                    </button>
                   )}
                 </div>
-              </button>
+              </div>
             ))}
             {displayCandidates.length === 0 && (
               <p className="py-6 text-center text-xs text-kv-gray-400">
@@ -203,7 +250,7 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
         {/* Footer actions */}
         <div className="flex items-center justify-between border-t border-kv-gray-200 px-6 py-4">
           <button
-            onClick={() => onSkip(item)}
+            onClick={() => onSkip(buildEditedItem())}
             className="rounded-xl border border-kv-gray-200 px-4 py-2 text-sm font-medium text-kv-gray-500 transition-colors hover:bg-kv-gray-50"
           >
             Přeskočit
@@ -217,13 +264,14 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch }
             </button>
             <button
               onClick={() => {
+                const edited = buildEditedItem();
                 if (manualSku.trim()) {
-                  onConfirm(item, { sku: manualSku.trim(), name: manualSku.trim(), manufacturer_code: null, manufacturer: null, category: null, unit: null, ean: null });
+                  onConfirm(edited, { sku: manualSku.trim(), name: manualSku.trim(), manufacturer_code: null, manufacturer: null, category: null, unit: null, ean: null });
                 } else {
-                  onConfirm(item, selectedProduct);
+                  onConfirm(edited, selectedProduct);
                 }
               }}
-              disabled={!selectedProduct && !manualSku.trim()}
+              disabled={!selectedProduct && !manualSku.trim() && !wasDeselected}
               className="rounded-xl bg-kv-red px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Potvrdit výběr

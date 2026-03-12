@@ -13,23 +13,37 @@ const offers = new Hono<Env>();
 
 /**
  * GET /offers
- * List all offers for the authenticated user, ordered by most recent first.
+ * List offers for the authenticated user with cursor-based pagination.
+ * Query params: limit (default 20), offset (default 0)
  */
 offers.get("/offers", authMiddleware, async (c) => {
   const user = c.get("user");
+  const limit = Math.min(Number(c.req.query("limit")) || 20, 100);
+  const offset = Math.max(Number(c.req.query("offset")) || 0, 0);
+
   const supabase = getAdminClient();
+
+  const { count, error: countError } = await supabase
+    .from("offers")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  if (countError) {
+    return c.json({ error: countError.message }, 500);
+  }
 
   const { data, error } = await supabase
     .from("offers")
-    .select("id, title, status, created_at, updated_at")
+    .select("id, title, status, header, created_at, updated_at")
     .eq("user_id", user.id)
-    .order("updated_at", { ascending: false });
+    .order("updated_at", { ascending: false })
+    .range(offset, offset + limit - 1);
 
   if (error) {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json({ offers: data ?? [] });
+  return c.json({ offers: data ?? [], total: count ?? 0 });
 });
 
 /**
@@ -98,6 +112,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
       status,
       candidates,
       confirmed,
+      review_status,
       extra_columns,
       products:matched_product_id (
         id, sku, name, name_secondary, unit, price, ean,
@@ -122,6 +137,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
     product: item.products ?? null,
     candidates: item.candidates ?? [],
     confirmed: item.confirmed ?? false,
+    reviewStatus: item.review_status ?? null,
     extraColumns: item.extra_columns ?? {},
   }));
 
@@ -130,6 +146,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
       id: offer.id,
       title: offer.title,
       status: offer.status,
+      header: offer.header ?? {},
       messages: offer.messages ?? [],
       createdAt: offer.created_at,
       updatedAt: offer.updated_at,
@@ -145,20 +162,21 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
 offers.put("/offers/:id", authMiddleware, async (c) => {
   const user = c.get("user");
   const offerId = c.req.param("id");
-  const body = await c.req.json<{ title?: string; status?: string }>();
+  const body = await c.req.json<{ title?: string; status?: string; header?: Record<string, string> }>();
 
   const supabase = getAdminClient();
 
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (body.title !== undefined) update.title = body.title.trim();
   if (body.status !== undefined) update.status = body.status;
+  if (body.header !== undefined) update.header = body.header;
 
   const { data, error } = await supabase
     .from("offers")
     .update(update)
     .eq("id", offerId)
     .eq("user_id", user.id)
-    .select("id, title, status, created_at, updated_at")
+    .select("id, title, status, header, created_at, updated_at")
     .single();
 
   if (error) {
@@ -256,6 +274,7 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
       status: item.confirmed ? "confirmed" : (item.matchType === "not_found" ? "processing" : "matched"),
       candidates: item.candidates ?? [],
       confirmed: item.confirmed ?? false,
+      review_status: item.reviewStatus ?? null,
       extra_columns: item.extraColumns ?? {},
     }));
 
@@ -285,6 +304,7 @@ interface OfferItemInput {
   confidence?: number;
   productId?: string | null;
   confirmed?: boolean;
+  reviewStatus?: string | null;
   candidates?: unknown[];
   extraColumns?: Record<string, string>;
 }

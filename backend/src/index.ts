@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { logger } from "hono/logger";
 import { env } from "./config/env.js";
 import { health } from "./routes/health.js";
@@ -13,6 +14,7 @@ import { offersRouter } from "./routes/offers.js";
 const app = new Hono();
 
 app.use("*", logger());
+app.use("/agent/offer-chat", bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.use(
   "*",
   cors({

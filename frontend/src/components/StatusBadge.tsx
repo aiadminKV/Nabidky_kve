@@ -21,7 +21,7 @@ const CONFIG: Record<MatchType | "processing", {
     textColor: "text-status-uncertain",
   },
   multiple: {
-    label: "Více",
+    label: "Možnosti",
     dotColor: "bg-status-multiple",
     bgColor: "bg-status-multiple-bg",
     textColor: "text-status-multiple",

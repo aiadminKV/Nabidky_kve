@@ -15,6 +15,7 @@ import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXl
 import type {
   ChatMessage,
   DebugEntry,
+  FileAttachment,
   OfferAction,
   OfferHeader,
   OfferItem,
@@ -53,6 +54,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     deliveryAddress: "",
   });
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
+  const batchPositionOffset = useRef(0);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -87,12 +89,13 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     }
   }, [supabase]);
 
-  const addMessage = useCallback((role: ChatMessage["role"], text: string) => {
+  const addMessage = useCallback((role: ChatMessage["role"], text: string, attachments?: FileAttachment[]) => {
     const msg: ChatMessage = {
       id: `msg_${++idCounter.current}`,
       role,
       text,
       timestamp: new Date(),
+      attachments,
     };
     setMessages((prev) => [...prev, msg]);
     return msg;
@@ -103,7 +106,6 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     get_category_info: "Zjišťování kategorií",
     add_item_to_offer: "Přidání položky",
     replace_product_in_offer: "Záměna produktu",
-    remove_item_from_offer: "Odstranění položky",
     parse_items_from_text: "Zpracování položek",
     process_items: "Hromadné zpracování",
     update_offer_header: "Aktualizace hlavičky",
@@ -147,19 +149,30 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           break;
         }
         case "process_items": {
-          const emptyItems: OfferItem[] = action.items.map((item, i) => ({
-            position: i,
-            originalName: item.name,
-            unit: item.unit,
-            quantity: item.quantity,
-            matchType: "not_found" as const,
-            confidence: 0,
-            product: null,
-            candidates: [],
-          }));
-          setOfferItems(emptyItems);
-          setSearchingSet(new Set(action.items.map((_, i) => i)));
-          setPhase("processing");
+          setOfferItems((prev) => {
+            const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
+            const offset = maxPos + 1;
+            batchPositionOffset.current = offset;
+            const newItems: OfferItem[] = action.items.map((item, i) => ({
+              position: offset + i,
+              originalName: item.name,
+              unit: item.unit,
+              quantity: item.quantity,
+              matchType: "not_found" as const,
+              confidence: 0,
+              product: null,
+              candidates: [],
+            }));
+            return [...prev, ...newItems];
+          });
+          setSearchingSet((prev) => {
+            const next = new Set(prev);
+            for (let i = 0; i < action.items.length; i++) {
+              next.add(batchPositionOffset.current + i);
+            }
+            return next;
+          });
+          if (phase === "idle" || phase === "parsed") setPhase("processing");
           break;
         }
         case "add_item": {
@@ -227,8 +240,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   // ──────────────────────────────────────────────────────────
 
   const handleSendMessage = useCallback(
-    async (text: string) => {
-      addMessage("user", text);
+    async (text: string, files?: FileAttachment[]) => {
+      addMessage("user", text, files);
       setIsParsingChat(true);
 
       const streamingMsgId = `msg_${++idCounter.current}`;
@@ -246,7 +259,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       try {
         const token = await getToken();
         const summary = buildOfferSummary();
-        const stream = offerChat(text, summary, token);
+        const stream = offerChat(text, summary, token, files);
 
         for await (const event of stream) {
           if (event.type === "text_delta") {
@@ -294,20 +307,21 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           } else if (event.type === "action") {
             processAction(event.data as unknown as OfferAction);
           } else if (event.type === "item_searching") {
-            const pos = event.data.position as number;
+            const pos = (event.data.position as number) + batchPositionOffset.current;
             setSearchingSet((prev) => new Set(prev).add(pos));
           } else if (event.type === "item_matched") {
             const data = event.data as unknown as OfferItem;
+            const adjustedPos = data.position + batchPositionOffset.current;
             setSearchingSet((prev) => {
               const next = new Set(prev);
-              next.delete(data.position);
+              next.delete(adjustedPos);
               return next;
             });
-            flashPosition(data.position);
+            flashPosition(adjustedPos);
             setOfferItems((prev) =>
               prev.map((item) =>
-                item.position === data.position
-                  ? { ...item, ...data, extraColumns: item.extraColumns }
+                item.position === adjustedPos
+                  ? { ...item, ...data, position: adjustedPos, extraColumns: item.extraColumns }
                   : item,
               ),
             );
@@ -599,12 +613,6 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setDebugLog([]);
   }, []);
 
-  const handleFileUpload = useCallback(
-    (_file: File) => {
-      addMessage("system", "Zpracování souborů bude implementováno v další fázi.");
-    },
-    [addMessage],
-  );
 
   // ──────────────────────────────────────────────────────────
   // Right panel content depends on the phase
@@ -670,7 +678,6 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             messages={messages}
             isProcessing={isParsingChat}
             onSendMessage={handleSendMessage}
-            onFileUpload={handleFileUpload}
             onPasteDetected={handlePasteDetected}
             debugSlot={
               <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />

@@ -14,12 +14,13 @@ import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
   offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx,
-  getOffer, saveOfferMessages, saveOfferItems,
+  getOffer, saveOfferMessages, saveOfferItems, updateOffer,
   type ChatMessageDTO, type SaveOfferItemInput,
 } from "@/lib/api";
 import type {
   ChatMessage,
   DebugEntry,
+  FileAttachment,
   OfferAction,
   OfferHeader,
   OfferItem,
@@ -27,6 +28,7 @@ import type {
   OfferPhase,
   ParsedItem,
   Product,
+  ReviewStatus,
   ToolCallStatus,
 } from "@/lib/types";
 
@@ -50,6 +52,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
+  const [exportWarning, setExportWarning] = useState<number | null>(null);
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
     customerIco: "",
     customerName: "",
@@ -63,10 +66,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   });
   const [loadingOffer, setLoadingOffer] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const batchPositionOffset = useRef(0);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveItemsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveHeaderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flashPosition = useCallback((pos: number) => {
     setChangedPositions((prev) => new Set(prev).add(pos));
@@ -113,6 +118,10 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
         setOfferTitle(offer.title);
 
+        if (offer.header && Object.keys(offer.header).length > 0) {
+          setOfferHeader((prev) => ({ ...prev, ...offer.header }));
+        }
+
         if (offer.messages && offer.messages.length > 0) {
           const restored: ChatMessage[] = offer.messages.map((m: ChatMessageDTO) => ({
             id: m.id,
@@ -139,6 +148,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             product: item.product,
             candidates: item.candidates ?? [],
             confirmed: item.confirmed,
+            reviewStatus: (item.reviewStatus as ReviewStatus) ?? undefined,
             extraColumns: item.extraColumns && Object.keys(item.extraColumns).length > 0
               ? item.extraColumns
               : undefined,
@@ -201,6 +211,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         confidence: i.confidence,
         productId: i.product?.id ?? null,
         confirmed: i.confirmed,
+        reviewStatus: i.reviewStatus ?? null,
         candidates: i.candidates ?? [],
         extraColumns: i.extraColumns,
       }));
@@ -217,12 +228,38 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     }, 2000);
   }, [persistItems]);
 
-  const addMessage = useCallback((role: ChatMessage["role"], text: string) => {
+  // ──────────────────────────────────────────────────────────
+  // Auto-save offer header (debounced)
+  // ──────────────────────────────────────────────────────────
+
+  const persistHeader = useCallback(async (header: OfferHeader) => {
+    try {
+      const token = await getToken();
+      await updateOffer(offerId, { header: header as unknown as Record<string, string> }, token);
+    } catch {
+      // silent
+    }
+  }, [offerId, getToken]);
+
+  const debouncedSaveHeader = useCallback((header: OfferHeader) => {
+    if (saveHeaderTimerRef.current) clearTimeout(saveHeaderTimerRef.current);
+    saveHeaderTimerRef.current = setTimeout(() => {
+      persistHeader(header);
+    }, 1500);
+  }, [persistHeader]);
+
+  const handleHeaderChange = useCallback((header: OfferHeader) => {
+    setOfferHeader(header);
+    debouncedSaveHeader(header);
+  }, [debouncedSaveHeader]);
+
+  const addMessage = useCallback((role: ChatMessage["role"], text: string, attachments?: FileAttachment[]) => {
     const msg: ChatMessage = {
       id: `msg_${++idCounter.current}`,
       role,
       text,
       timestamp: new Date(),
+      attachments,
     };
     setMessages((prev) => {
       const next = [...prev, msg];
@@ -237,7 +274,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     get_category_info: "Zjišťování kategorií",
     add_item_to_offer: "Přidání položky",
     replace_product_in_offer: "Záměna produktu",
-    remove_item_from_offer: "Odstranění položky",
     parse_items_from_text: "Zpracování položek",
     process_items: "Hromadné zpracování",
     update_offer_header: "Aktualizace hlavičky",
@@ -281,19 +317,30 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           break;
         }
         case "process_items": {
-          const emptyItems: OfferItem[] = action.items.map((item, i) => ({
-            position: i,
-            originalName: item.name,
-            unit: item.unit,
-            quantity: item.quantity,
-            matchType: "not_found" as const,
-            confidence: 0,
-            product: null,
-            candidates: [],
-          }));
-          setOfferItems(emptyItems);
-          setSearchingSet(new Set(action.items.map((_, i) => i)));
-          setPhase("processing");
+          setOfferItems((prev) => {
+            const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
+            const offset = maxPos + 1;
+            batchPositionOffset.current = offset;
+            const newItems: OfferItem[] = action.items.map((item, i) => ({
+              position: offset + i,
+              originalName: item.name,
+              unit: item.unit,
+              quantity: item.quantity,
+              matchType: "not_found" as const,
+              confidence: 0,
+              product: null,
+              candidates: [],
+            }));
+            return [...prev, ...newItems];
+          });
+          setSearchingSet((prev) => {
+            const next = new Set(prev);
+            for (let i = 0; i < action.items.length; i++) {
+              next.add(batchPositionOffset.current + i);
+            }
+            return next;
+          });
+          if (phase === "idle" || phase === "parsed") setPhase("processing");
           break;
         }
         case "add_item": {
@@ -312,6 +359,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               product,
               candidates: (action.candidates ?? []) as Product[],
               reasoning: action.reasoning,
+              reviewStatus: "ai_suggestion",
             };
             const next = [...prev, newItem];
             debouncedSaveItems(next);
@@ -336,6 +384,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
                       : i.candidates,
                     matchType: action.matchType ?? (product ? ("match" as const) : i.matchType),
                     confidence: action.confidence ?? (product ? 100 : i.confidence),
+                    reviewStatus: "ai_suggestion" as const,
+                    confirmed: false,
                   }
                 : i,
             );
@@ -367,8 +417,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   // ──────────────────────────────────────────────────────────
 
   const handleSendMessage = useCallback(
-    async (text: string) => {
-      addMessage("user", text);
+    async (text: string, files?: FileAttachment[]) => {
+      addMessage("user", text, files);
       setIsParsingChat(true);
 
       const streamingMsgId = `msg_${++idCounter.current}`;
@@ -386,7 +436,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       try {
         const token = await getToken();
         const summary = buildOfferSummary();
-        const stream = offerChat(text, summary, token);
+        const stream = offerChat(text, summary, token, files);
 
         for await (const event of stream) {
           if (event.type === "text_delta") {
@@ -436,20 +486,21 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           } else if (event.type === "action") {
             processAction(event.data as unknown as OfferAction);
           } else if (event.type === "item_searching") {
-            const pos = event.data.position as number;
+            const pos = (event.data.position as number) + batchPositionOffset.current;
             setSearchingSet((prev) => new Set(prev).add(pos));
           } else if (event.type === "item_matched") {
             const data = event.data as unknown as OfferItem;
+            const adjustedPos = data.position + batchPositionOffset.current;
             setSearchingSet((prev) => {
               const next = new Set(prev);
-              next.delete(data.position);
+              next.delete(adjustedPos);
               return next;
             });
-            flashPosition(data.position);
+            flashPosition(adjustedPos);
             setOfferItems((prev) => {
               const next = prev.map((item) =>
-                item.position === data.position
-                  ? { ...item, ...data, extraColumns: item.extraColumns }
+                item.position === adjustedPos
+                  ? { ...item, ...data, position: adjustedPos, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
                   : item,
               );
               debouncedSaveItems(next);
@@ -582,7 +633,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           setOfferItems((prev) => {
             const next = prev.map((item) =>
               item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns }
+                ? { ...item, ...data, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
                 : item,
             );
             debouncedSaveItems(next);
@@ -642,7 +693,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           setOfferItems((prev) => {
             const next = prev.map((item) =>
               item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns }
+                ? { ...item, ...data, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
                 : item,
             );
             debouncedSaveItems(next);
@@ -676,7 +727,17 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setOfferItems((prev) => {
       const next = prev.map((i) =>
         i.position === item.position
-          ? { ...i, product: selectedProduct, confirmed: true, matchType: "match" as const, confidence: 100 }
+          ? {
+              ...i,
+              originalName: item.originalName,
+              quantity: item.quantity,
+              unit: item.unit,
+              product: selectedProduct,
+              confirmed: true,
+              reviewStatus: "reviewed" as const,
+              matchType: "match" as const,
+              confidence: 100,
+            }
           : i,
       );
       debouncedSaveItems(next);
@@ -688,7 +749,16 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const handleSkip = useCallback((item: OfferItem) => {
     setOfferItems((prev) => {
       const next = prev.map((i) =>
-        i.position === item.position ? { ...i, confirmed: true } : i,
+        i.position === item.position
+          ? {
+              ...i,
+              originalName: item.originalName,
+              quantity: item.quantity,
+              unit: item.unit,
+              confirmed: true,
+              reviewStatus: "reviewed" as const,
+            }
+          : i,
       );
       debouncedSaveItems(next);
       return next;
@@ -705,10 +775,170 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   );
 
   // ──────────────────────────────────────────────────────────
+  // Add / delete items in review phase
+  // ──────────────────────────────────────────────────────────
+
+  const handleAddItem = useCallback(() => {
+    setOfferItems((prev) => {
+      const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
+      const newItem: OfferItem = {
+        position: maxPos + 1,
+        originalName: "",
+        unit: null,
+        quantity: null,
+        matchType: "not_found",
+        confidence: 0,
+        product: null,
+        candidates: [],
+      };
+      const next = [...prev, newItem];
+      debouncedSaveItems(next);
+      return next;
+    });
+    if (phase === "idle" || phase === "parsed") setPhase("review");
+  }, [phase, debouncedSaveItems]);
+
+  const handleDeleteItem = useCallback((position: number) => {
+    setOfferItems((prev) => {
+      const filtered = prev.filter((i) => i.position !== position);
+      const next = filtered.map((item, idx) => ({ ...item, position: idx }));
+      debouncedSaveItems(next);
+      return next;
+    });
+  }, [debouncedSaveItems]);
+
+  // ──────────────────────────────────────────────────────────
+  // Re-process all items (new search from scratch)
+  // ──────────────────────────────────────────────────────────
+
+  const handleProcessAgain = useCallback(async () => {
+    const validItems = offerItems.filter((i) => i.originalName.trim());
+    if (validItems.length === 0) return;
+
+    setPhase("processing");
+    addMessage("system", `Spouštím nové vyhledávání pro ${validItems.length} položek…`);
+
+    const resetItems: OfferItem[] = validItems.map((item, i) => ({
+      ...item,
+      position: i,
+      matchType: "not_found" as const,
+      confidence: 0,
+      product: null,
+      candidates: [],
+      confirmed: undefined,
+      reviewStatus: undefined,
+    }));
+    setOfferItems(resetItems);
+    setSearchingSet(new Set(resetItems.map((_, i) => i)));
+
+    try {
+      const token = await getToken();
+      const stream = searchItems(
+        validItems.map((i) => ({ name: i.originalName, unit: i.unit, quantity: i.quantity })),
+        token,
+      );
+
+      for await (const event of stream) {
+        if (event.type === "item_searching") {
+          const pos = event.data.position as number;
+          setSearchingSet((prev) => new Set(prev).add(pos));
+        } else if (event.type === "item_matched") {
+          const data = event.data as unknown as OfferItem;
+          setSearchingSet((prev) => {
+            const next = new Set(prev);
+            next.delete(data.position);
+            return next;
+          });
+          flashPosition(data.position);
+          setOfferItems((prev) => {
+            const next = prev.map((item) =>
+              item.position === data.position
+                ? { ...item, ...data, extraColumns: item.extraColumns }
+                : item,
+            );
+            debouncedSaveItems(next);
+            return next;
+          });
+        } else if (event.type === "status" && event.data.phase === "review") {
+          setSearchingSet(new Set());
+          setPhase("review");
+          addMessage("system", "Nové vyhledávání dokončeno. Zkontrolujte výsledky.");
+        } else if (event.type === "error") {
+          addMessage("system", `Chyba: ${event.data.message}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Nastala chyba";
+      addMessage("system", `Chyba: ${msg}`);
+    } finally {
+      setSearchingSet(new Set());
+      setPhase("review");
+    }
+  }, [offerItems, addMessage, getToken, flashPosition, debouncedSaveItems]);
+
+  // ──────────────────────────────────────────────────────────
+  // Search single item
+  // ──────────────────────────────────────────────────────────
+
+  const handleSearchSingleItem = useCallback(async (item: OfferItem) => {
+    if (!item.originalName.trim()) return;
+
+    setSearchingSet((prev) => new Set(prev).add(item.position));
+    setOfferItems((prev) =>
+      prev.map((i) =>
+        i.position === item.position
+          ? { ...i, matchType: "not_found" as const, confidence: 0, product: null, candidates: [], confirmed: undefined, reviewStatus: undefined }
+          : i,
+      ),
+    );
+
+    try {
+      const token = await getToken();
+      const stream = searchItemsSemantic(
+        [{ name: item.originalName, unit: item.unit, quantity: item.quantity, position: item.position }],
+        token,
+      );
+
+      for await (const event of stream) {
+        if (event.type === "item_matched") {
+          const data = event.data as unknown as OfferItem;
+          setSearchingSet((prev) => {
+            const next = new Set(prev);
+            next.delete(data.position);
+            return next;
+          });
+          flashPosition(data.position);
+          setOfferItems((prev) => {
+            const next = prev.map((i) =>
+              i.position === data.position
+                ? { ...i, ...data, extraColumns: i.extraColumns }
+                : i,
+            );
+            debouncedSaveItems(next);
+            return next;
+          });
+        } else if (event.type === "error") {
+          addMessage("system", `Chyba při vyhledávání položky: ${event.data.message}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Nastala chyba";
+      addMessage("system", `Chyba: ${msg}`);
+    } finally {
+      setSearchingSet((prev) => {
+        const next = new Set(prev);
+        next.delete(item.position);
+        return next;
+      });
+    }
+  }, [addMessage, getToken, flashPosition, debouncedSaveItems]);
+
+  // ──────────────────────────────────────────────────────────
   // Export & reset
   // ──────────────────────────────────────────────────────────
 
-  const handleExport = useCallback(async () => {
+  const doExport = useCallback(async () => {
+    let exported = false;
     try {
       const token = await getToken();
       const exportItems = offerItems.map((item) => ({
@@ -730,10 +960,34 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       a.download = `kv-nabidka-${Date.now()}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
+      exported = true;
     } catch {
       addMessage("system", "Export se nezdařil.");
     }
-  }, [offerItems, offerHeader, getToken, addMessage]);
+
+    if (exported) {
+      try {
+        const token = await getToken();
+        await updateOffer(offerId, { status: "exported" }, token);
+      } catch {
+        // status update is best-effort
+      }
+    }
+  }, [offerItems, offerHeader, offerId, getToken, addMessage]);
+
+  const handleExport = useCallback(() => {
+    const unreviewedCount = offerItems.filter((i) => i.reviewStatus !== "reviewed").length;
+    if (unreviewedCount > 0) {
+      setExportWarning(unreviewedCount);
+    } else {
+      doExport();
+    }
+  }, [offerItems, doExport]);
+
+  const handleExportConfirm = useCallback(() => {
+    setExportWarning(null);
+    doExport();
+  }, [doExport]);
 
   const handleReset = useCallback(async () => {
     setPhase("idle");
@@ -757,12 +1011,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setDebugLog([]);
   }, []);
 
-  const handleFileUpload = useCallback(
-    (_file: File) => {
-      addMessage("system", "Zpracování souborů bude implementováno v další fázi.");
-    },
-    [addMessage],
-  );
 
   // ──────────────────────────────────────────────────────────
   // Loading / error states
@@ -851,7 +1099,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             onExport={handleExport}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
+            onProcessAgain={handleProcessAgain}
+            onAddItem={handleAddItem}
+            onDeleteItem={handleDeleteItem}
+            onSearchItem={handleSearchSingleItem}
             isSearchingSemantic={isSearchingSemantic}
+            isProcessing={searchingSet.size > 0}
           />
         );
     }
@@ -861,14 +1114,13 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     <div className="flex h-screen flex-col">
       <Header email={email} isAdmin={isAdmin} offerTitle={offerTitle} />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left panel – Chat + Debug */}
-        <div className="relative flex w-[420px] shrink-0 flex-col border-r border-kv-gray-200 bg-white">
+        <div className="relative flex w-[420px] shrink-0 flex-col border-r border-kv-gray-200 bg-white min-h-0">
           <ChatPanel
             messages={messages}
             isProcessing={isParsingChat}
             onSendMessage={handleSendMessage}
-            onFileUpload={handleFileUpload}
             onPasteDetected={handlePasteDetected}
             debugSlot={
               <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />
@@ -877,9 +1129,11 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         </div>
 
         {/* Right panel – Context-dependent */}
-        <div className="flex flex-1 flex-col bg-white">
-          <OfferHeaderForm header={offerHeader} onChange={setOfferHeader} />
-          {renderRightPanel()}
+        <div className="flex flex-1 min-h-0 min-w-0 flex-col bg-white">
+          <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} />
+          <div className="flex-1 min-h-0 min-w-0">
+            {renderRightPanel()}
+          </div>
         </div>
       </div>
 
@@ -902,6 +1156,42 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           onSendAsMessage={handlePasteSendAsMessage}
           onCancel={handlePasteCancel}
         />
+      )}
+
+      {/* Export warning modal – unreviewed AI suggestions */}
+      {exportWarning !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-50">
+              <svg className="h-6 w-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+            </div>
+            <h3 className="text-base font-bold text-kv-dark">Nezkontrolované položky</h3>
+            <p className="mt-1 text-sm text-kv-gray-400">
+              V nabídce {exportWarning === 1
+                ? "je 1 položka, kterou jste nezkontrolovali"
+                : exportWarning < 5
+                  ? `jsou ${exportWarning} položky, které jste nezkontrolovali`
+                  : `je ${exportWarning} položek, které jste nezkontrolovali`
+              }. Opravdu chcete exportovat bez kontroly?
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setExportWarning(null)}
+                className="rounded-xl px-4 py-2.5 text-sm font-medium text-kv-gray-500 transition-colors hover:bg-kv-gray-100"
+              >
+                Zkontrolovat
+              </button>
+              <button
+                onClick={handleExportConfirm}
+                className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:bg-amber-600"
+              >
+                Exportovat
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

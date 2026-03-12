@@ -1,4 +1,4 @@
-import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader } from "./types";
+import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader, FileAttachment, ReviewStatus } from "./types";
 
 /** Backend URL — direct from browser, no proxy */
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -75,8 +75,18 @@ export function offerChat(
   message: string,
   offerItems: OfferItemSummary[],
   token: string,
+  files?: FileAttachment[],
 ) {
-  return streamSSE("/agent/offer-chat", { message, offerItems }, token);
+  const body: Record<string, unknown> = { message, offerItems };
+  if (files?.length) {
+    body.files = files.map((f) => ({
+      type: f.type,
+      filename: f.filename,
+      mimeType: f.mimeType,
+      base64: f.base64,
+    }));
+  }
+  return streamSSE("/agent/offer-chat", body, token);
 }
 
 /** Semantic search for not_found items (SSE) – user-triggered Phase 2 */
@@ -267,6 +277,7 @@ export interface OfferSummary {
   id: string;
   title: string;
   status: string;
+  header?: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -275,6 +286,7 @@ export interface OfferDetail {
   id: string;
   title: string;
   status: string;
+  header?: Record<string, string>;
   messages: ChatMessageDTO[];
   createdAt: string;
   updatedAt: string;
@@ -297,16 +309,30 @@ export interface OfferItemDTO {
   product: Product | null;
   candidates: Product[];
   confirmed: boolean;
+  reviewStatus: ReviewStatus | null;
   extraColumns: Record<string, string>;
 }
 
-export async function listOffers(token: string): Promise<OfferSummary[]> {
-  const res = await fetch(`${BACKEND_URL}/offers`, {
+export interface ListOffersResponse {
+  offers: OfferSummary[];
+  total: number;
+}
+
+export async function listOffers(
+  token: string,
+  params: { limit?: number; offset?: number } = {},
+): Promise<ListOffersResponse> {
+  const qs = new URLSearchParams();
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.offset != null) qs.set("offset", String(params.offset));
+
+  const url = `${BACKEND_URL}/offers${qs.toString() ? `?${qs}` : ""}`;
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed to load offers");
   const data = await res.json();
-  return data.offers ?? [];
+  return { offers: data.offers ?? [], total: data.total ?? 0 };
 }
 
 export async function createOffer(
@@ -342,7 +368,7 @@ export async function getOffer(
 
 export async function updateOffer(
   id: string,
-  data: { title?: string; status?: string },
+  data: { title?: string; status?: string; header?: Record<string, string> },
   token: string,
 ): Promise<OfferSummary> {
   const res = await fetch(`${BACKEND_URL}/offers/${id}`, {
@@ -393,6 +419,7 @@ export interface SaveOfferItemInput {
   confidence?: number;
   productId?: string | null;
   confirmed?: boolean;
+  reviewStatus?: ReviewStatus | null;
   candidates?: unknown[];
   extraColumns?: Record<string, string>;
 }

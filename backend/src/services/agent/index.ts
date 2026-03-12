@@ -105,12 +105,34 @@ vždy pracuj s EXISTUJÍCÍMI pozicemi. Neutvářej duplicity.
 - **add_item_to_offer** — přidej JEDNU novou položku (nejdříve vyhledej SKU).
 - **replace_product_in_offer** — vyměň produkt na existující pozici.
   Použij po search_product pro nahrazení produktu na dané pozici.
-- **remove_item_from_offer** — odstraň položku z nabídky.
 - **parse_items_from_text** — pouze parsuj seznam položek BEZ vyhledávání.
   Použij jen když uživatel výslovně říká "jen je vypiš" nebo "neprohledávej".
 
 ### Hlavička nabídky
 - **update_offer_header** — vyplň nebo aktualizuj údaje zákazníka (IČ, jméno, termín dodání, název zakázky, telefon, email, pobočka, adresa dodání, spec. akce). Zavolej VŽDY, když ze vstupu dokážeš vyextrahovat jakákoliv zákaznická data.
+
+## Obrázky, PDF, Excel a hlasové zprávy
+Umíš analyzovat obrázky (fotky poptávek, tabulky, screenshoty) a PDF soubory přiložené k zprávě.
+Excel/CSV soubory jsou automaticky rozparsovány a obsah ti přijde jako TSV tabulka v textu zprávy.
+Hlasové zprávy jsou automaticky přepisovány do textu a přepis ti přijde v textu zprávy.
+
+Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s poptávkou/objednávkou:
+1. Přečti a vytěž všechny položky (názvy produktů, množství, jednotky).
+2. Extrahuj zákaznická data (IČ, jméno, adresa, telefon, email, datum dodání).
+3. Zavolej update_offer_header pro zákaznická data a process_items pro položky.
+4. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
+
+### Hlasové zprávy
+- Přepis hlasové zprávy přichází jako text v uvozovkách.
+- Uživatel může mluvit neformálně, s překlepy nebo hovorově — extrahuj záměr a položky co nejlépe.
+- Pokud je přepis nejednoznačný, zeptej se na upřesnění.
+
+### Excel/CSV specifika
+- Data z Excelu přicházejí jako TSV (tabulátory oddělené hodnoty) s hlavičkami.
+- Sloupce mohou mít různé názvy — hledej sloupce obsahující název produktu, množství, jednotku, kód.
+- Sloupce jako "CISLO", "SKU", "KÓD" = kód produktu; "NAZEV", "NÁZEV" = název; "MJ", "JEDNOTKA" = jednotka; "MNOŽSTVÍ", "KS", "POČET" = množství.
+- Pokud je v tabulce sloupec s kódem produktu (SKU), použij ho v poli "name" formou "název (SKU: kód)".
+- Ignoruj řádky, které jsou zjevně sumační, prázdné nebo hlavičkové.
 
 ## Jak pracuješ
 1. Jednej okamžitě — jakmile pochopíš záměr, začni.
@@ -324,23 +346,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     },
   });
 
-  const removeItemTool = tool({
-    name: "remove_item_from_offer",
-    description: "Remove an item from the offer by its position (0-based index).",
-    parameters: z.object({
-      position: z.number().describe("Position (0-based index) of the item to remove"),
-    }),
-    async execute({ position }) {
-      await onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "start" } });
-      await onEvent({
-        type: "action",
-        data: { type: "remove_item", position },
-      });
-      await onEvent({ type: "tool_activity", tool: "remove_item_from_offer", data: { status: "end" } });
-      return `Položka na pozici ${position} odstraněna z nabídky.`;
-    },
-  });
-
   const parseItemsTool = tool({
     name: "parse_items_from_text",
     description:
@@ -527,7 +532,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       streamingCategoryInfoTool,
       addItemTool,
       replaceProductTool,
-      removeItemTool,
       parseItemsTool,
       processItemsTool,
       updateHeaderTool,

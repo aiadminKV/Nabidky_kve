@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { streamText } from "hono/streaming";
-import { run } from "@openai/agents";
+import { run, user } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
 import { searchProductsFulltext } from "../services/search.js";
 import { searchPipelineForItem, type PipelineResult, type PipelineDebugFn } from "../services/searchPipeline.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
+import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
+import { transcribeAudio } from "../services/audioTranscribe.js";
 
 const agent = new Hono();
 
@@ -320,10 +322,16 @@ function buildOfferContext(items: OfferItemSummary[]): string {
   return `Aktuální nabídka (${items.length} položek):\n${header}\n${divider}\n${rows.join("\n")}`;
 }
 
+interface FileAttachmentInput {
+  type: "image" | "pdf" | "excel" | "audio";
+  filename: string;
+  mimeType: string;
+  base64: string;
+}
+
 const ACTION_TOOL_NAMES = new Set([
   "add_item_to_offer",
   "replace_product_in_offer",
-  "remove_item_from_offer",
   "parse_items_from_text",
   "process_items",
   "update_offer_header",
@@ -335,13 +343,14 @@ const ACTION_TOOL_NAMES = new Set([
  * Uses gpt-5-mini with tool-call architecture.
  */
 agent.post("/agent/offer-chat", authMiddleware, async (c) => {
-  const { message, offerItems } = await c.req.json<{
+  const { message, offerItems, files } = await c.req.json<{
     message: string;
     offerItems?: OfferItemSummary[];
+    files?: FileAttachmentInput[];
   }>();
 
-  if (!message?.trim()) {
-    return c.json({ error: "Message is required" }, 400);
+  if (!message?.trim() && !files?.length) {
+    return c.json({ error: "Message or files required" }, 400);
   }
 
   c.header("Content-Type", "text/event-stream");
@@ -365,9 +374,9 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
       await safeWrite(sseEvent("status", { phase: "thinking" }));
 
       const offerContext = buildOfferContext(offerItems ?? []);
-      const prompt = `${offerContext}\n\n---\n\nZpráva uživatele:\n"${message}"`;
+      const promptText = `${offerContext}\n\n---\n\nZpráva uživatele:\n"${message}"`;
 
-      await safeWrite(sseEvent("debug", { ts: Date.now(), type: "prompt", data: prompt }));
+      await safeWrite(sseEvent("debug", { ts: Date.now(), type: "prompt", data: promptText }));
 
       const offerAgent = createOfferAgentStreaming(async (entry) => {
         if (entry.type === "action") {
@@ -385,7 +394,73 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
         }
       });
 
-      const result = await run(offerAgent, prompt, { stream: true, maxTurns: Infinity });
+      // Pre-process Excel/CSV files into text, keep images/PDFs as multimodal parts
+      type ContentPart =
+        | { type: "input_text"; text: string }
+        | { type: "input_image"; image: string; detail?: string }
+        | { type: "input_file"; file: string; filename: string };
+
+      const textParts: string[] = [];
+      const multimodalFiles: FileAttachmentInput[] = [];
+
+      if (files?.length) {
+        for (const f of files) {
+          if (f.type === "excel") {
+            try {
+              const isCsv = f.mimeType === "text/csv" || f.mimeType === "application/csv"
+                || f.filename.toLowerCase().endsWith(".csv");
+              const sheets = isCsv
+                ? parseCsvForChat(f.base64)
+                : await parseExcelForChat(f.base64);
+              textParts.push(spreadsheetToText(sheets, f.filename));
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : "Parse error";
+              textParts.push(`Chyba při čtení souboru "${f.filename}": ${msg}`);
+            }
+          } else if (f.type === "audio") {
+            try {
+              await safeWrite(sseEvent("status", { phase: "transcribing" }));
+              const transcript = await transcribeAudio(f.base64, f.mimeType, f.filename);
+              textParts.push(`Přepis hlasové zprávy "${f.filename}":\n"${transcript}"`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : "Transcription error";
+              textParts.push(`Chyba při přepisu hlasové zprávy "${f.filename}": ${msg}`);
+            }
+          } else {
+            multimodalFiles.push(f);
+          }
+        }
+      }
+
+      const fullPrompt = textParts.length > 0
+        ? `${promptText}\n\n---\n\n${textParts.join("\n\n---\n\n")}`
+        : promptText;
+
+      let agentInput: string | ReturnType<typeof user>[];
+
+      if (multimodalFiles.length > 0) {
+        const parts: ContentPart[] = [{ type: "input_text", text: fullPrompt }];
+        for (const f of multimodalFiles) {
+          if (f.type === "image") {
+            parts.push({
+              type: "input_image",
+              image: `data:${f.mimeType};base64,${f.base64}`,
+              detail: "auto",
+            });
+          } else {
+            parts.push({
+              type: "input_file",
+              file: `data:${f.mimeType};base64,${f.base64}`,
+              filename: f.filename,
+            });
+          }
+        }
+        agentInput = [user(parts)];
+      } else {
+        agentInput = fullPrompt;
+      }
+
+      const result = await run(offerAgent, agentInput, { stream: true, maxTurns: Infinity });
 
       for await (const event of result) {
         if (event.type === "raw_model_stream_event") {

@@ -1,6 +1,9 @@
 /** Match type returned by the search engine */
 export type MatchType = "match" | "uncertain" | "multiple" | "alternative" | "not_found";
 
+/** Review status tracks whether an AI-modified item has been reviewed by the user */
+export type ReviewStatus = "ai_suggestion" | "reviewed";
+
 /** Phases of the offer processing flow */
 export type OfferPhase = "idle" | "parsing" | "parsed" | "processing" | "review";
 
@@ -57,6 +60,7 @@ export interface OfferItem {
   reformulatedQuery?: string;
   pipelineMs?: number;
   confirmed?: boolean;
+  reviewStatus?: ReviewStatus;
   extraColumns?: Record<string, string>;
 }
 
@@ -101,6 +105,17 @@ export interface ToolCallStatus {
   status: "running" | "done";
 }
 
+/** File attachment sent alongside a chat message */
+export interface FileAttachment {
+  type: "image" | "pdf" | "excel" | "audio";
+  filename: string;
+  mimeType: string;
+  /** Raw base64 string (without data URL prefix) */
+  base64: string;
+  /** Data URL for local preview (images only) */
+  previewUrl?: string;
+}
+
 /** Chat message displayed in the UI */
 export interface ChatMessage {
   id: string;
@@ -109,6 +124,7 @@ export interface ChatMessage {
   timestamp: Date;
   isStreaming?: boolean;
   toolCalls?: ToolCallStatus[];
+  attachments?: FileAttachment[];
 }
 
 /** Phases of the pricelist upload flow */
