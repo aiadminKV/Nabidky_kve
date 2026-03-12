@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
+import { buildAppUrl, buildSafeAppRedirectUrl } from "@/lib/request-url";
 import { createClient } from "@/lib/supabase/server";
 import type { EmailOtpType } from "@supabase/supabase-js";
 
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
 
   if (!tokenHash || !type) {
     return NextResponse.redirect(
-      new URL("/login?error=invalid_link", request.url),
+      buildAppUrl(request, "/login?error=invalid_link"),
     );
   }
 
@@ -28,15 +29,15 @@ export async function GET(request: NextRequest) {
   if (error) {
     console.error("OTP verification failed:", error.message);
     return NextResponse.redirect(
-      new URL(`/login?error=${encodeURIComponent(error.message)}`, request.url),
+      buildAppUrl(request, `/login?error=${encodeURIComponent(error.message)}`),
     );
   }
 
   if (type === "invite" || type === "recovery") {
     return NextResponse.redirect(
-      new URL("/auth/set-password", request.url),
+      buildAppUrl(request, "/auth/set-password"),
     );
   }
 
-  return NextResponse.redirect(new URL(next, request.url));
+  return NextResponse.redirect(buildSafeAppRedirectUrl(request, next));
 }

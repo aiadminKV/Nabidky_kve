@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -82,12 +81,6 @@ export function LoginForm() {
             <label htmlFor="password" className="block text-xs font-medium text-kv-gray-600">
               Heslo
             </label>
-            <Link
-              href="/auth/forgot-password"
-              className="text-xs text-kv-red hover:text-kv-red-dark transition-colors"
-            >
-              Zapomenuté heslo?
-            </Link>
           </div>
           <input
             id="password"
