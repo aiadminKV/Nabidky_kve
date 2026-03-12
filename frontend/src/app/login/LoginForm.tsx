@@ -43,12 +43,16 @@ export function LoginForm() {
     <div className="w-full max-w-sm">
       {/* Mobile logo */}
       <div className="mb-8 flex items-center gap-3 lg:hidden">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-kv-red">
-          <span className="text-lg font-bold text-white">KV</span>
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white overflow-hidden shadow-inner border border-kv-gray-200">
+          <img src="/kv-logo.jpeg" alt="K&V Elektro" className="h-full w-full object-contain" />
         </div>
-        <div>
-          <h1 className="text-lg font-bold text-kv-dark">K&V ELEKTRO</h1>
-          <p className="text-xs text-kv-gray-400">Správce nabídek</p>
+        <div className="flex h-10 flex-col justify-center gap-0.5">
+          <h1 className="text-sm font-black tracking-tight leading-none text-kv-dark">
+            DATA BRIDGE <span className="text-kv-red">PRO</span>
+          </h1>
+          <p className="text-[9px] font-medium tracking-[0.15em] text-kv-gray-400 leading-none">
+            Offer Master
+          </p>
         </div>
       </div>
 

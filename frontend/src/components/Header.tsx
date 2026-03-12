@@ -46,7 +46,7 @@ export function Header({ email, isAdmin, offerTitle }: HeaderProps) {
             </div>
             <div className="hidden h-10 flex-col justify-center gap-0.5 sm:flex">
               <h1 className="text-sm font-black tracking-tight leading-none">
-                Data Bridge <span className="text-kv-red">Pro</span>
+                DATA BRIDGE <span className="text-kv-red">PRO</span>
               </h1>
               <span className="text-[9px] font-medium tracking-[0.15em] text-blue-200/60 leading-none">
                 Offer Master
