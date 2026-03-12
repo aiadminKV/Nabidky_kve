@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useEffect, type FormEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -9,6 +15,7 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -38,6 +45,20 @@ export function LoginForm() {
     router.refresh();
   }
 
+  function handleFormKeyDown(e: KeyboardEvent<HTMLFormElement>) {
+    if (e.key !== "Enter" || loading || e.nativeEvent.isComposing) {
+      return;
+    }
+
+    const target = e.target as HTMLElement;
+    if (target.tagName === "TEXTAREA") {
+      return;
+    }
+
+    e.preventDefault();
+    formRef.current?.requestSubmit();
+  }
+
   return (
     <div className="w-full max-w-sm">
       {/* Mobile logo */}
@@ -60,7 +81,12 @@ export function LoginForm() {
         Zadejte své přihlašovací údaje
       </p>
 
-      <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+      <form
+        ref={formRef}
+        onSubmit={handleSubmit}
+        onKeyDown={handleFormKeyDown}
+        className="mt-8 space-y-5"
+      >
         <div>
           <label htmlFor="email" className="mb-1.5 block text-xs font-medium text-kv-gray-600">
             E-mail
