@@ -248,6 +248,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onPasteDetect
   const [fileError, setFileError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -390,20 +391,28 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onPasteDetect
     (m) => m.toolCalls?.some((tc) => tc.status === "running"),
   );
   useEffect(() => {
-    if (hasStreaming || hasActiveToolCalls || messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = messagesContainerRef.current;
+    if (!container || (!hasStreaming && !hasActiveToolCalls && messages.length === 0)) return;
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: hasStreaming || hasActiveToolCalls ? "auto" : "smooth",
+    });
+
+    if (!hasStreaming && !hasActiveToolCalls) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }
   }, [messages, hasStreaming, hasActiveToolCalls]);
 
   return (
     <div
-      className="flex flex-1 min-h-0 flex-col"
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-3">
         {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center px-6">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-kv-red/10">
@@ -480,21 +489,21 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onPasteDetect
       )}
 
       {/* Input area */}
-      <div className="border-t border-kv-gray-200 bg-white p-3">
+      <div className="border-t border-kv-gray-200 bg-white p-4">
         {/* Pending file attachments */}
         {pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             {pendingFiles.map((att, i) => (
               <AttachmentPreview key={`${att.filename}-${i}`} att={att} onRemove={() => removeFile(i)} />
             ))}
           </div>
         )}
         {fileError && (
-          <p className="text-xs text-red-500 mb-2">{fileError}</p>
+          <p className="mb-3 text-xs text-red-500">{fileError}</p>
         )}
         {/* Recording indicator */}
         {isRecording && (
-          <div className="flex items-center gap-2 mb-2 px-1">
+          <div className="mb-3 flex items-center gap-2 px-1">
             <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
             <span className="text-xs font-medium text-red-600">
               Nahrávání… {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}
@@ -555,7 +564,7 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onPasteDetect
               }
             }}
             disabled={isProcessing || isRecording}
-            placeholder={isRecording ? "Nahrávám hlasovku…" : pendingFiles.length > 0 ? "Přidejte popis nebo rovnou odešlete…" : "Vložte poptávku nebo napište dotaz…"}
+            placeholder=""
             rows={1}
             className="min-h-[40px] max-h-[120px] flex-1 resize-none rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-2.5 text-sm text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-navy/30 focus:bg-white focus:ring-2 focus:ring-kv-navy/10 disabled:opacity-50"
           />

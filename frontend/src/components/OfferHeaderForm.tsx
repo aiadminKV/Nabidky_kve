@@ -8,6 +8,7 @@ import { AddressAutocomplete } from "./AddressAutocomplete";
 interface OfferHeaderFormProps {
   header: OfferHeader;
   onChange: (header: OfferHeader) => void;
+  forceExpanded?: boolean;
 }
 
 const PRIMARY_TEXT_FIELDS: Array<{
@@ -33,93 +34,202 @@ const SECONDARY_TEXT_FIELDS: Array<{
   { key: "branch", label: "Pobočka", placeholder: "Smíchov" },
 ];
 
-export function OfferHeaderForm({ header, onChange }: OfferHeaderFormProps) {
-  const [expanded, setExpanded] = useState(false);
+const INPUT_CLASS =
+  "w-full rounded-xl border border-kv-gray-200 bg-white px-3 py-2 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10";
 
-  const secondaryHasValues = [
-    header.phone, header.email, header.specialAction,
-    header.branch, header.deliveryAddress,
-  ].filter((v) => v.trim() !== "").length;
+function TextField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-semibold text-kv-navy">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={INPUT_CLASS}
+      />
+    </label>
+  );
+}
+
+export function OfferHeaderForm({ header, onChange, forceExpanded = false }: OfferHeaderFormProps) {
+  const [expanded, setExpanded] = useState(false);
 
   const update = (key: keyof OfferHeader, value: string) => {
     onChange({ ...header, [key]: value });
   };
+  const showExpanded = forceExpanded || expanded;
 
   return (
-    <div className="shrink-0 border-b border-kv-gray-200">
-      {/* Primary row */}
-      <div className="flex items-end gap-3 bg-white px-5 py-3">
-        {PRIMARY_TEXT_FIELDS.map((f) => (
-          <label key={f.key} className={`block ${f.grow ? "flex-1 min-w-0" : "w-32"}`}>
-            <span className="mb-1 block text-xs font-semibold text-kv-navy">{f.label}</span>
-            <input
-              type="text"
-              value={header[f.key]}
-              onChange={(e) => update(f.key, e.target.value)}
-              placeholder={f.placeholder}
-              className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-3 py-2 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:bg-white focus:ring-2 focus:ring-kv-navy/10"
-            />
-          </label>
-        ))}
-
-        {/* Date picker for delivery date */}
-        <label className="block w-44">
-          <span className="mb-1 block text-xs font-semibold text-kv-navy">Dodání</span>
-          <DatePicker
-            value={header.deliveryDate}
-            onChange={(v) => update("deliveryDate", v)}
-            placeholder="Vyberte datum"
-          />
-        </label>
-
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className={`flex h-[38px] items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition-colors shrink-0 ${
-            expanded
-              ? "border-kv-navy/20 bg-kv-navy/5 text-kv-navy"
-              : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-500 hover:bg-kv-gray-100 hover:text-kv-gray-700"
-          }`}
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
-          </svg>
-          Více
-          {secondaryHasValues > 0 && (
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-kv-navy text-[10px] font-semibold text-white">
-              {secondaryHasValues}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Secondary row */}
-      {expanded && (
-        <div className="flex items-end gap-3 border-t border-kv-gray-100 bg-kv-gray-50 px-5 py-3">
-          {SECONDARY_TEXT_FIELDS.map((f) => (
-            <label key={f.key} className={`block ${f.grow ? "flex-1 min-w-0" : "w-36"}`}>
-              <span className="mb-1 block text-xs font-semibold text-kv-navy">{f.label}</span>
-              <input
-                type="text"
-                value={header[f.key]}
-                onChange={(e) => update(f.key, e.target.value)}
-                placeholder={f.placeholder}
-                className="w-full rounded-xl border border-kv-gray-200 bg-white px-3 py-2 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
-              />
-            </label>
-          ))}
-
-          {/* Address autocomplete */}
-          <label className="block flex-1 min-w-0">
-            <span className="mb-1 block text-xs font-semibold text-kv-navy">Adresa dodání</span>
-            <AddressAutocomplete
-              value={header.deliveryAddress}
-              onChange={(v) => update("deliveryAddress", v)}
-              placeholder="Ulice 15, Město, 67120"
-            />
-          </label>
+    <div className="shrink-0">
+      {!forceExpanded && (
+        <div className="border-b border-kv-gray-200 bg-kv-gray-50/70 px-6 py-4">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className={`inline-flex h-10 items-center gap-2 self-start rounded-xl border px-3.5 text-xs font-medium transition-colors ${
+                expanded
+                  ? "border-kv-navy/20 bg-kv-navy/5 text-kv-navy"
+                  : "border-kv-gray-200 bg-white text-kv-gray-500 hover:bg-kv-gray-50 hover:text-kv-gray-700"
+              }`}
+            >
+              <svg className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m9 5 7 7-7 7" />
+              </svg>
+              {expanded ? "Skrýt doplňující údaje" : "Zobrazit doplňující údaje"}
+            </button>
+          </div>
         </div>
       )}
+
+      <div className="px-6 py-5">
+        {forceExpanded ? (
+          <div className="grid gap-4">
+            <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
+              <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                <div className="grid gap-3">
+                  <TextField
+                    label={PRIMARY_TEXT_FIELDS[1].label}
+                    value={header.customerName}
+                    placeholder={PRIMARY_TEXT_FIELDS[1].placeholder}
+                    onChange={(value) => update("customerName", value)}
+                  />
+                  <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                    <TextField
+                      label={PRIMARY_TEXT_FIELDS[0].label}
+                      value={header.customerIco}
+                      placeholder={PRIMARY_TEXT_FIELDS[0].placeholder}
+                      onChange={(value) => update("customerIco", value)}
+                    />
+                    <TextField
+                      label={PRIMARY_TEXT_FIELDS[2].label}
+                      value={header.offerName}
+                      placeholder={PRIMARY_TEXT_FIELDS[2].placeholder}
+                      onChange={(value) => update("offerName", value)}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                <div className="grid gap-3">
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-kv-navy">Datum dodání</span>
+                    <DatePicker
+                      value={header.deliveryDate}
+                      onChange={(v) => update("deliveryDate", v)}
+                      placeholder="Vyberte datum"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-kv-navy">Adresa dodání</span>
+                    <AddressAutocomplete
+                      value={header.deliveryAddress}
+                      onChange={(v) => update("deliveryAddress", v)}
+                      placeholder="Ulice 15, Město, 67120"
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {SECONDARY_TEXT_FIELDS.map((f) => (
+                  <TextField
+                    key={f.key}
+                    label={f.label}
+                    value={header[f.key]}
+                    placeholder={f.placeholder}
+                    onChange={(value) => update(f.key, value)}
+                  />
+                ))}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-4 xl:grid-cols-[1.15fr_1.4fr_1fr]">
+              <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                <div className="grid gap-3">
+                  <TextField
+                    label={PRIMARY_TEXT_FIELDS[0].label}
+                    value={header.customerIco}
+                    placeholder={PRIMARY_TEXT_FIELDS[0].placeholder}
+                    onChange={(value) => update("customerIco", value)}
+                  />
+                  <TextField
+                    label={PRIMARY_TEXT_FIELDS[1].label}
+                    value={header.customerName}
+                    placeholder={PRIMARY_TEXT_FIELDS[1].placeholder}
+                    onChange={(value) => update("customerName", value)}
+                  />
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                <TextField
+                  label={PRIMARY_TEXT_FIELDS[2].label}
+                  value={header.offerName}
+                  placeholder={PRIMARY_TEXT_FIELDS[2].placeholder}
+                  onChange={(value) => update("offerName", value)}
+                />
+              </section>
+
+              <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold text-kv-navy">Datum dodání</span>
+                  <DatePicker
+                    value={header.deliveryDate}
+                    onChange={(v) => update("deliveryDate", v)}
+                    placeholder="Vyberte datum"
+                  />
+                </label>
+              </section>
+            </div>
+
+            {showExpanded && (
+              <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_1.6fr]">
+                <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {SECONDARY_TEXT_FIELDS.map((f) => (
+                      <TextField
+                        key={f.key}
+                        label={f.label}
+                        value={header[f.key]}
+                        placeholder={f.placeholder}
+                        onChange={(value) => update(f.key, value)}
+                      />
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-kv-navy">Adresa dodání</span>
+                    <AddressAutocomplete
+                      value={header.deliveryAddress}
+                      onChange={(v) => update("deliveryAddress", v)}
+                      placeholder="Ulice 15, Město, 67120"
+                    />
+                  </label>
+                </section>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

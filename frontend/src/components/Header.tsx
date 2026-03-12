@@ -44,12 +44,12 @@ export function Header({ email, isAdmin, offerTitle }: HeaderProps) {
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white overflow-hidden shadow-inner">
               <img src="/kv-logo.jpeg" alt="K&V Elektro" className="h-full w-full object-contain" />
             </div>
-            <div className="hidden sm:block">
-              <h1 className="text-sm font-black tracking-tight uppercase leading-none">
-                Data Bridge <span className="text-kv-red">PRO</span>
+            <div className="hidden h-10 flex-col justify-center gap-0.5 sm:flex">
+              <h1 className="text-sm font-black tracking-tight leading-none">
+                Data Bridge <span className="text-kv-red">Pro</span>
               </h1>
-              <span className="text-[9px] font-medium uppercase tracking-[0.15em] text-blue-200/60 leading-none">
-                K&V Elektro
+              <span className="text-[9px] font-medium tracking-[0.15em] text-blue-200/60 leading-none">
+                Offer Master
               </span>
             </div>
           </Link>

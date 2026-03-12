@@ -10,6 +10,7 @@ import { ParsedItemsTable } from "@/components/ParsedItemsTable";
 import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
+import { OfferHeaderSummary } from "@/components/OfferHeaderSummary";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
@@ -53,6 +54,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const [exportWarning, setExportWarning] = useState<number | null>(null);
+  const [isHeaderModalOpen, setIsHeaderModalOpen] = useState(false);
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
     customerIco: "",
     customerName: "",
@@ -1061,17 +1063,17 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       case "idle":
       case "parsing":
         return (
-          <div className="flex h-full items-center justify-center">
-            <div className="text-center px-8">
-              <div className="mb-3 mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-kv-gray-100">
+          <div className="flex h-full items-center justify-center p-6">
+            <div className="w-full max-w-md rounded-2xl border border-dashed border-kv-gray-200 bg-kv-gray-50/80 px-8 py-10 text-center">
+              <div className="mb-4 mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-sm">
                 <svg className="h-5 w-5 text-kv-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0 1 12 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M13.125 12h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125M20.625 12c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5M12 14.625v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 14.625c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m0 0v.375" />
                 </svg>
               </div>
-              <p className="text-sm font-medium text-kv-gray-500">
+              <p className="text-sm font-medium text-kv-gray-600">
                 {isParsingChat ? "AI zpracovává požadavek…" : "Vložte poptávku vlevo"}
               </p>
-              <p className="mt-1 text-xs text-kv-gray-400">
+              <p className="mt-1.5 text-xs leading-relaxed text-kv-gray-400">
                 Tabulka se naplní po vložení dat
               </p>
             </div>
@@ -1111,28 +1113,46 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-screen flex-col bg-kv-gray-50">
       <Header email={email} isAdmin={isAdmin} offerTitle={offerTitle} />
 
-      <div className="flex flex-1 overflow-hidden min-h-0">
-        {/* Left panel – Chat + Debug */}
-        <div className="relative flex w-[420px] shrink-0 flex-col border-r border-kv-gray-200 bg-white min-h-0">
-          <ChatPanel
-            messages={messages}
-            isProcessing={isParsingChat}
-            onSendMessage={handleSendMessage}
-            onPasteDetected={handlePasteDetected}
-            debugSlot={
-              <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />
-            }
-          />
-        </div>
+      <div className="flex flex-1 min-h-0 overflow-hidden p-4 sm:p-5">
+        <div className="flex flex-1 min-h-0 gap-4">
+          {/* Left panel – Chat + Debug */}
+          <div className="flex w-[420px] shrink-0 min-h-0 flex-col gap-3">
+            <OfferHeaderSummary
+              header={offerHeader}
+              onEdit={() => setIsHeaderModalOpen(true)}
+              compact
+            />
 
-        {/* Right panel – Context-dependent */}
-        <div className="flex flex-1 min-h-0 min-w-0 flex-col bg-white">
-          <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} />
-          <div className="flex-1 min-h-0 min-w-0">
-            {renderRightPanel()}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-kv-gray-200 bg-white shadow-sm">
+              <div className="border-b border-kv-gray-200 px-5 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-kv-navy">AI KV Agent</h2>
+                </div>
+              </div>
+              <div className="relative flex flex-1 min-h-0 overflow-hidden">
+                <ChatPanel
+                  messages={messages}
+                  isProcessing={isParsingChat}
+                  onSendMessage={handleSendMessage}
+                  onPasteDetected={handlePasteDetected}
+                  debugSlot={
+                    <AgentDebugPanel entries={debugLog} onClear={handleClearDebug} />
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Right panel – Context-dependent */}
+          <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+            <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-kv-gray-200 bg-white shadow-sm">
+              <div className="flex-1 min-h-0 min-w-0">
+                {renderRightPanel()}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1156,6 +1176,29 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           onSendAsMessage={handlePasteSendAsMessage}
           onCancel={handlePasteCancel}
         />
+      )}
+
+      {isHeaderModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-kv-gray-200 px-6 py-5">
+              <h3 className="text-base font-semibold text-kv-navy">Detail zákazníka</h3>
+              <button
+                type="button"
+                onClick={() => setIsHeaderModalOpen(false)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-kv-gray-200 text-kv-gray-400 transition-colors hover:bg-kv-gray-50 hover:text-kv-gray-600"
+                aria-label="Zavřít detail zákazníka"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto">
+              <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Export warning modal – unreviewed AI suggestions */}
