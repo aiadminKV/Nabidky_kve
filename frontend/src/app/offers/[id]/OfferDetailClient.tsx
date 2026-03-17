@@ -56,6 +56,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [exportWarning, setExportWarning] = useState<number | null>(null);
   const [isHeaderModalOpen, setIsHeaderModalOpen] = useState(false);
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
+    customerId: "",
     customerIco: "",
     customerName: "",
     deliveryDate: "",
@@ -1180,8 +1181,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {isHeaderModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-white shadow-2xl">
-            <div className="flex items-start justify-between gap-4 border-b border-kv-gray-200 px-6 py-5">
+          <div className="w-full max-w-6xl rounded-2xl border border-white/20 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-kv-gray-200 px-6 py-4">
               <h3 className="text-base font-semibold text-kv-navy">Detail zákazníka</h3>
               <button
                 type="button"
@@ -1194,9 +1195,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
                 </svg>
               </button>
             </div>
-            <div className="overflow-y-auto">
-              <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded />
-            </div>
+            <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded />
           </div>
         </div>
       )}

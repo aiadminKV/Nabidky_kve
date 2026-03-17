@@ -39,6 +39,8 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
   const [total, setTotal] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  const [newCustomerId, setNewCustomerId] = useState("");
+  const [newCustomerName, setNewCustomerName] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -111,16 +113,21 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
     setCreating(true);
     try {
       const token = await getToken();
-      const offer = await createOffer(newTitle.trim(), token);
+      const header: Record<string, string> = {};
+      if (newCustomerId.trim()) header.customerId = newCustomerId.trim();
+      if (newCustomerName.trim()) header.customerName = newCustomerName.trim();
+      const offer = await createOffer(newTitle.trim(), token, Object.keys(header).length > 0 ? header : undefined);
       setShowCreateModal(false);
       setNewTitle("");
+      setNewCustomerId("");
+      setNewCustomerName("");
       router.push(`/offers/${offer.id}`);
     } catch {
       // silent
     } finally {
       setCreating(false);
     }
-  }, [newTitle, creating, getToken, router]);
+  }, [newTitle, newCustomerId, newCustomerName, creating, getToken, router]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteId || deleting) return;
@@ -233,10 +240,10 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                             <span className="truncate">{offer.header.customerName}</span>
                           </>
                         )}
-                        {offer.header?.customerIco && (
+                        {offer.header?.customerId && (
                           <>
                             <span className="text-kv-gray-200">·</span>
-                            <span className="tabular-nums">IČ {offer.header.customerIco}</span>
+                            <span className="tabular-nums">ID {offer.header.customerId}</span>
                           </>
                         )}
                       </div>
@@ -288,20 +295,53 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
             <div className="p-6">
             <h3 className="text-sm font-black text-kv-navy uppercase tracking-widest">Nová nabídka</h3>
             <p className="mt-1 text-sm text-kv-gray-400">
-              Pojmenujte nabídku pro snadnou orientaci.
+              Vyplňte základní údaje nabídky.
             </p>
 
-            <input
-              type="text"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreate();
-              }}
-              placeholder="Např. Firma ABC – poptávka kabelů"
-              autoFocus
-              className="mt-4 w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
-            />
+            <div className="mt-4 grid gap-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-kv-navy">Název nabídky <span className="text-kv-red">*</span></span>
+                <input
+                  type="text"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCreate();
+                  }}
+                  placeholder="Např. Firma ABC – poptávka kabelů"
+                  autoFocus
+                  className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-kv-navy">ID zákazníka</span>
+                  <input
+                    type="text"
+                    value={newCustomerId}
+                    onChange={(e) => setNewCustomerId(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreate();
+                    }}
+                    placeholder="123456"
+                    className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-kv-navy">Zákazník</span>
+                  <input
+                    type="text"
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreate();
+                    }}
+                    placeholder="Firma s.r.o."
+                    className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                  />
+                </label>
+              </div>
+            </div>
 
             </div>
             <div className="bg-kv-gray-50 border-t border-kv-gray-100 p-4 flex justify-end gap-3">
@@ -309,6 +349,8 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                 onClick={() => {
                   setShowCreateModal(false);
                   setNewTitle("");
+                  setNewCustomerId("");
+                  setNewCustomerName("");
                 }}
                 className="px-5 py-2.5 bg-white border border-kv-gray-200 text-kv-gray-600 rounded-lg text-xs font-bold uppercase tracking-wider transition hover:bg-kv-gray-100"
               >

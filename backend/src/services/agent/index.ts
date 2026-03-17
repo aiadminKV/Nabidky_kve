@@ -108,9 +108,6 @@ vždy pracuj s EXISTUJÍCÍMI pozicemi. Neutvářej duplicity.
 - **parse_items_from_text** — pouze parsuj seznam položek BEZ vyhledávání.
   Použij jen když uživatel výslovně říká "jen je vypiš" nebo "neprohledávej".
 
-### Hlavička nabídky
-- **update_offer_header** — vyplň nebo aktualizuj údaje zákazníka (IČ, jméno, termín dodání, název zakázky, telefon, email, pobočka, adresa dodání, spec. akce). Zavolej VŽDY, když ze vstupu dokážeš vyextrahovat jakákoliv zákaznická data.
-
 ## Obrázky, PDF, Excel a hlasové zprávy
 Umíš analyzovat obrázky (fotky poptávek, tabulky, screenshoty) a PDF soubory přiložené k zprávě.
 Excel/CSV soubory jsou automaticky rozparsovány a obsah ti přijde jako TSV tabulka v textu zprávy.
@@ -118,9 +115,8 @@ Hlasové zprávy jsou automaticky přepisovány do textu a přepis ti přijde v 
 
 Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s poptávkou/objednávkou:
 1. Přečti a vytěž všechny položky (názvy produktů, množství, jednotky).
-2. Extrahuj zákaznická data (IČ, jméno, adresa, telefon, email, datum dodání).
-3. Zavolej update_offer_header pro zákaznická data a process_items pro položky.
-4. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
+2. Zavolej process_items pro položky.
+3. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
 
 ### Hlasové zprávy
 - Přepis hlasové zprávy přichází jako text v uvozovkách.
@@ -140,9 +136,7 @@ Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s
 3. Modifikace EXISTUJÍCÍCH položek → search_product + replace_product_in_offer pro každou pozici.
 4. Jednotlivý ad-hoc dotaz → search_product + add_item_to_offer.
 5. Stručné shrnutí na konci — napiš co jsi udělal.
-6. Informační dotazy — odpověz jen textem.
-7. Pokud vstup obsahuje zákaznická data (IČ, jméno, adresa, datum...), vyplň hlavičku přes update_offer_header.
-8. Pokud vstup obsahuje seznam položek I zákaznická data, zavolej OBOJÍ: update_offer_header + process_items.`;
+6. Informační dotazy — odpověz jen textem.`;
 
 /**
  * Creates a streaming offer agent with debug + action callbacks.
@@ -480,46 +474,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
     },
   });
 
-  const updateHeaderTool = tool({
-    name: "update_offer_header",
-    description:
-      "Update customer/offer header fields. Only provide fields you want to change — " +
-      "omitted or null fields are left unchanged. Use this to fill in customer data extracted from text input " +
-      "(email, pasted order, etc.).",
-    parameters: z.object({
-      customerIco: z.string().nullable().default(null).describe("Customer ID / IČ"),
-      customerName: z.string().nullable().default(null).describe("Customer name"),
-      deliveryDate: z.string().nullable().default(null).describe("Delivery date (YYYY-MM-DD or locale format)"),
-      offerName: z.string().nullable().default(null).describe("Offer name / order reference"),
-      phone: z.string().nullable().default(null).describe("Contact phone number"),
-      email: z.string().nullable().default(null).describe("Contact email"),
-      specialAction: z.string().nullable().default(null).describe("Special action code"),
-      branch: z.string().nullable().default(null).describe("Branch / pickup location"),
-      deliveryAddress: z.string().nullable().default(null).describe("Delivery address"),
-    }),
-    async execute(fields) {
-      await onEvent({ type: "tool_activity", tool: "update_offer_header", data: { status: "start" } });
-
-      const updates: Record<string, string> = {};
-      for (const [key, value] of Object.entries(fields)) {
-        if (value != null && value !== "") {
-          updates[key] = value;
-        }
-      }
-
-      await onEvent({
-        type: "action",
-        data: { type: "update_header", fields: updates },
-      });
-      await onEvent({ type: "tool_activity", tool: "update_offer_header", data: { status: "end" } });
-
-      const filled = Object.keys(updates);
-      return filled.length > 0
-        ? `Hlavička aktualizována: ${filled.join(", ")}.`
-        : "Žádná pole k aktualizaci.";
-    },
-  });
-
   return new Agent({
     name: "KV Offer Assistant",
     instructions: OFFER_AGENT_INSTRUCTIONS,
@@ -534,7 +488,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       replaceProductTool,
       parseItemsTool,
       processItemsTool,
-      updateHeaderTool,
     ],
   });
 }

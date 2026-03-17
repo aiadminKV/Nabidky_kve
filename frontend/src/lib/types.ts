@@ -35,6 +35,7 @@ export interface ParsedItem {
 
 /** Customer/offer header data for export */
 export interface OfferHeader {
+  customerId: string;
   customerIco: string;
   customerName: string;
   deliveryDate: string;

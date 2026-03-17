@@ -338,14 +338,18 @@ export async function listOffers(
 export async function createOffer(
   title: string,
   token: string,
+  header?: Record<string, string>,
 ): Promise<OfferSummary> {
+  const body: Record<string, unknown> = { title };
+  if (header) body.header = header;
+
   const res = await fetch(`${BACKEND_URL}/offers`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));

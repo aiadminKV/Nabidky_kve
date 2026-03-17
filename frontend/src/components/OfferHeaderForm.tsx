@@ -17,6 +17,7 @@ const PRIMARY_TEXT_FIELDS: Array<{
   placeholder: string;
   grow?: boolean;
 }> = [
+  { key: "customerId", label: "ID zákazníka", placeholder: "123456" },
   { key: "customerIco", label: "IČ", placeholder: "12345678" },
   { key: "customerName", label: "Zákazník", placeholder: "Firma s.r.o.", grow: true },
   { key: "offerName", label: "Zakázka", placeholder: "RD Kocourkov", grow: true },
@@ -100,22 +101,28 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
                 <div className="grid gap-3">
                   <TextField
-                    label={PRIMARY_TEXT_FIELDS[1].label}
+                    label="Zákazník"
                     value={header.customerName}
-                    placeholder={PRIMARY_TEXT_FIELDS[1].placeholder}
+                    placeholder="Firma s.r.o."
                     onChange={(value) => update("customerName", value)}
                   />
-                  <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                  <div className="grid gap-3 md:grid-cols-[120px_140px_minmax(0,1fr)]">
                     <TextField
-                      label={PRIMARY_TEXT_FIELDS[0].label}
+                      label="ID zákazníka"
+                      value={header.customerId}
+                      placeholder="123456"
+                      onChange={(value) => update("customerId", value)}
+                    />
+                    <TextField
+                      label="IČ"
                       value={header.customerIco}
-                      placeholder={PRIMARY_TEXT_FIELDS[0].placeholder}
+                      placeholder="12345678"
                       onChange={(value) => update("customerIco", value)}
                     />
                     <TextField
-                      label={PRIMARY_TEXT_FIELDS[2].label}
+                      label="Zakázka"
                       value={header.offerName}
-                      placeholder={PRIMARY_TEXT_FIELDS[2].placeholder}
+                      placeholder="RD Kocourkov"
                       onChange={(value) => update("offerName", value)}
                     />
                   </div>
@@ -160,29 +167,37 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
           </div>
         ) : (
           <>
-            <div className="grid gap-4 xl:grid-cols-[1.15fr_1.4fr_1fr]">
+            <div className="grid gap-4 xl:grid-cols-[1.3fr_1.2fr_1fr]">
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
                 <div className="grid gap-3">
                   <TextField
-                    label={PRIMARY_TEXT_FIELDS[0].label}
-                    value={header.customerIco}
-                    placeholder={PRIMARY_TEXT_FIELDS[0].placeholder}
-                    onChange={(value) => update("customerIco", value)}
-                  />
-                  <TextField
-                    label={PRIMARY_TEXT_FIELDS[1].label}
+                    label="Zákazník"
                     value={header.customerName}
-                    placeholder={PRIMARY_TEXT_FIELDS[1].placeholder}
+                    placeholder="Firma s.r.o."
                     onChange={(value) => update("customerName", value)}
                   />
+                  <div className="grid gap-3 grid-cols-2">
+                    <TextField
+                      label="ID zákazníka"
+                      value={header.customerId}
+                      placeholder="123456"
+                      onChange={(value) => update("customerId", value)}
+                    />
+                    <TextField
+                      label="IČ"
+                      value={header.customerIco}
+                      placeholder="12345678"
+                      onChange={(value) => update("customerIco", value)}
+                    />
+                  </div>
                 </div>
               </section>
 
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
                 <TextField
-                  label={PRIMARY_TEXT_FIELDS[2].label}
+                  label="Zakázka"
                   value={header.offerName}
-                  placeholder={PRIMARY_TEXT_FIELDS[2].placeholder}
+                  placeholder="RD Kocourkov"
                   onChange={(value) => update("offerName", value)}
                 />
               </section>

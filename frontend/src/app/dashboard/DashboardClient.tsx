@@ -43,6 +43,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
+    customerId: "",
     customerIco: "",
     customerName: "",
     deliveryDate: "",

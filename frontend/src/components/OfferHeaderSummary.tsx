@@ -30,6 +30,7 @@ function SummaryItem({ label, value, compact = false }: { label: string; value: 
 
 export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHeaderSummaryProps) {
   const filledCount = [
+    header.customerId,
     header.customerName,
     header.customerIco,
     header.offerName,
@@ -46,7 +47,7 @@ export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHea
               <div className="flex items-center gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-kv-navy">Zákazník</h2>
                 <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-kv-gray-500">
-                  {filledCount}/5
+                  {filledCount}/6
                 </span>
               </div>
             </div>
@@ -69,6 +70,12 @@ export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHea
             <span className="mr-2 text-kv-gray-400">Zákazník</span>
             <span className="truncate text-kv-dark">{header.customerName.trim() || "Nezadáno"}</span>
           </span>
+          {header.customerId.trim() && (
+            <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-3 py-1.5 text-[11px] font-medium text-kv-gray-600">
+              <span className="mr-2 text-kv-gray-400">ID zákazníka</span>
+              <span className="text-kv-dark">{header.customerId}</span>
+            </span>
+          )}
           <span className="inline-flex max-w-full items-center rounded-full border border-kv-gray-200 bg-white px-3 py-1.5 text-[11px] font-medium text-kv-gray-600">
             <span className="mr-2 text-kv-gray-400">Zakázka</span>
             <span className="truncate text-kv-dark">{header.offerName.trim() || "Nezadáno"}</span>
@@ -85,7 +92,7 @@ export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHea
               <span className="text-kv-dark">{header.customerIco}</span>
             </span>
           )}
-          </div>
+        </div>
       </div>
     );
   }
@@ -98,11 +105,11 @@ export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHea
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-kv-navy">Zákazník a hlavička nabídky</h2>
               <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-kv-gray-500">
-                {filledCount}/5 klíčových údajů
+                {filledCount}/6 klíčových údajů
               </span>
             </div>
             <p className="mt-1 text-xs text-kv-gray-400">
-              Zkrácený přehled. AI může tyto údaje průběžně doplňovat a upravovat.
+              Zkrácený přehled údajů zákazníka a nabídky.
             </p>
           </div>
 
@@ -120,8 +127,9 @@ export function OfferHeaderSummary({ header, onEdit, compact = false }: OfferHea
       </div>
 
       <div className="px-5 py-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <SummaryItem label="Zákazník" value={header.customerName} />
+          <SummaryItem label="ID zákazníka" value={header.customerId} />
           <SummaryItem label="IČ" value={header.customerIco} />
           <SummaryItem label="Zakázka" value={header.offerName} />
           <SummaryItem label="Dodání" value={formatDate(header.deliveryDate)} />

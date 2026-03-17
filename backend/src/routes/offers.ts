@@ -52,7 +52,7 @@ offers.get("/offers", authMiddleware, async (c) => {
  */
 offers.post("/offers", authMiddleware, async (c) => {
   const user = c.get("user");
-  const { title } = await c.req.json<{ title: string }>();
+  const { title, header } = await c.req.json<{ title: string; header?: Record<string, string> }>();
 
   if (!title?.trim()) {
     return c.json({ error: "Title is required" }, 400);
@@ -60,15 +60,20 @@ offers.post("/offers", authMiddleware, async (c) => {
 
   const supabase = getAdminClient();
 
+  const insertData: Record<string, unknown> = {
+    user_id: user.id,
+    title: title.trim(),
+    status: "draft",
+    messages: [],
+  };
+  if (header && Object.keys(header).length > 0) {
+    insertData.header = header;
+  }
+
   const { data, error } = await supabase
     .from("offers")
-    .insert({
-      user_id: user.id,
-      title: title.trim(),
-      status: "draft",
-      messages: [],
-    })
-    .select("id, title, status, created_at, updated_at")
+    .insert(insertData)
+    .select("id, title, status, header, created_at, updated_at")
     .single();
 
   if (error) {
