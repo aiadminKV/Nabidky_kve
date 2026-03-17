@@ -43,6 +43,14 @@ const HEADER_FONT: Partial<ExcelJS.Font> = {
 
 const CELL_FONT: Partial<ExcelJS.Font> = { size: 10 };
 
+const MATCH_TYPE_LABELS: Record<string, string> = {
+  match: "Shoda",
+  uncertain: "Nejistá",
+  multiple: "Možnosti",
+  alternative: "Alternativa",
+  not_found: "Nenalezeno",
+};
+
 function applyHeaderStyle(row: ExcelJS.Row, colCount: number) {
   row.font = HEADER_FONT;
   row.fill = HEADER_FILL;
@@ -120,24 +128,27 @@ exportRouter.post("/export/xlsx", authMiddleware, async (c) => {
   dataSheet.addRow([]);
 
   // Item header section
-  const itemHeaders = ["Artikl", "prodID", "Název", "Množství", "MJ"];
+  const itemHeaders = ["Artikl", "prodID", "Název", "Množství", "MJ", "Stav"];
   const itemHeaderRow = dataSheet.addRow(itemHeaders);
   applyHeaderStyle(itemHeaderRow, itemHeaders.length);
 
   // Item data rows
   for (const item of items) {
+    const label = MATCH_TYPE_LABELS[item.matchType] ?? item.matchType;
+    const stav = item.confidence > 0 ? `${label} ${item.confidence}%` : label;
     const row = dataSheet.addRow([
       item.sku ?? "",
       item.manufacturerCode ?? "",
       item.originalName,
       item.quantity,
       item.unit ?? "ks",
+      stav,
     ]);
     row.font = CELL_FONT;
 
     const fillColor = getMatchColor(item.matchType);
     if (fillColor) {
-      for (let c = 1; c <= 5; c++) {
+      for (let c = 1; c <= 6; c++) {
         row.getCell(c).fill = {
           type: "pattern",
           pattern: "solid",
@@ -153,7 +164,7 @@ exportRouter.post("/export/xlsx", authMiddleware, async (c) => {
   dataSheet.getColumn(3).width = 45;
   dataSheet.getColumn(4).width = 12;
   dataSheet.getColumn(5).width = 8;
-  dataSheet.getColumn(6).width = 14;
+  dataSheet.getColumn(6).width = 14;  // Stav
   dataSheet.getColumn(7).width = 25;
   dataSheet.getColumn(8).width = 14;
   dataSheet.getColumn(9).width = 14;
@@ -183,6 +194,7 @@ exportRouter.post("/export/xlsx", authMiddleware, async (c) => {
     ["Název", "Název produktu z poptávky", "ano"],
     ["Množství", "Objednané množství", "ano"],
     ["MJ", "Měrná jednotka (ks, m, bal…) — pokud chybí, přebere se z katalogu", "volitelné"],
+    ["Stav", "Stav párování: Shoda / Nejistá / Možnosti / Alternativa / Nenalezeno", "automatické"],
     ["", "", ""],
     ["", "POZNÁMKY", ""],
     ["TAN", "Položka s vyplněným Artikl — standardní objednávka", ""],
