@@ -8,6 +8,7 @@ import { searchPipelineForItem, type PipelineResult, type PipelineDebugFn } from
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
+import { extractTextFromImage } from "../services/imageOcr.js";
 
 const agent = new Hono();
 
@@ -426,10 +427,22 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
               const msg = err instanceof Error ? err.message : "Transcription error";
               textParts.push(`Chyba při přepisu hlasové zprávy "${f.filename}": ${msg}`);
             }
+          } else if (f.type === "image") {
+            try {
+              await safeWrite(sseEvent("status", { phase: "reading_image" }));
+              const extracted = await extractTextFromImage(f.base64, f.mimeType);
+              textParts.push(`Obsah obrázku "${f.filename}":\n${extracted}`);
+            } catch {
+              multimodalFiles.push(f);
+            }
           } else {
             multimodalFiles.push(f);
           }
         }
+      }
+
+      if (textParts.length > 0) {
+        await safeWrite(sseEvent("status", { phase: "thinking" }));
       }
 
       const fullPrompt = textParts.length > 0

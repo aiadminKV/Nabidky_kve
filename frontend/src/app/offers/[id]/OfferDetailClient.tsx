@@ -509,6 +509,30 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               debouncedSaveItems(next);
               return next;
             });
+          } else if (event.type === "status" && (event.data.phase === "reading_image" || event.data.phase === "transcribing")) {
+            const statusPhase = event.data.phase as string;
+            const label = statusPhase === "reading_image" ? "Čtu obrázek" : "Přepisuji hlasovku";
+            const tcId = `tc_${++toolCallSeq}`;
+            const tc: ToolCallStatus = { id: tcId, tool: statusPhase, label, status: "running" };
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === streamingMsgId
+                  ? { ...m, toolCalls: [...(m.toolCalls ?? []), tc] }
+                  : m,
+              ),
+            );
+          } else if (event.type === "status" && event.data.phase === "thinking") {
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== streamingMsgId) return m;
+                const updated = (m.toolCalls ?? []).map((tc) =>
+                  (tc.tool === "reading_image" || tc.tool === "transcribing") && tc.status === "running"
+                    ? { ...tc, status: "done" as const }
+                    : tc,
+                );
+                return { ...m, toolCalls: updated };
+              }),
+            );
           } else if (event.type === "status" && event.data.phase === "review") {
             setSearchingSet(new Set());
             setPhase("review");

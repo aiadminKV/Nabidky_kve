@@ -11,6 +11,8 @@ const TOOL_ICONS: Record<string, string> = {
   remove_item_from_offer: "🗑",
   parse_items_from_text: "📋",
   update_offer_header: "📝",
+  reading_image: "🖼️",
+  transcribing: "🎙️",
 };
 
 function ToolCallChip({ tc }: { tc: ToolCallStatus }) {
