@@ -5,6 +5,27 @@ import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover } from "./ProductInfoPopover";
 
+const UNIT_GROUPS: Record<string, string> = {
+  ks: "ks", kus: "ks", kusu: "ks", kusů: "ks", kusov: "ks", pcs: "ks",
+  m: "m", metr: "m", metry: "m", metrů: "m", met: "m",
+  bal: "bal", balení: "bal", baleni: "bal", pack: "bal",
+  kg: "kg", kilogram: "kg",
+  sada: "sada", set: "sada", komplet: "sada",
+};
+
+function normalizeUnit(u: string): string {
+  return UNIT_GROUPS[u.toLowerCase().trim()] ?? u.toLowerCase().trim();
+}
+
+function hasUnitMismatch(demandUnit: string | null, productUnit: string | null): boolean {
+  if (!demandUnit || !productUnit) return false;
+  return normalizeUnit(demandUnit) !== normalizeUnit(productUnit);
+}
+
+function unitMismatchLabel(demandUnit: string, productUnit: string): string {
+  return `Poptávka: ${demandUnit} → Produkt: ${productUnit}`;
+}
+
 interface ResultsTableProps {
   items: OfferItem[];
   searchingSet: Set<number>;
@@ -48,6 +69,7 @@ export function ResultsTable({
   const isSearching = searchingSet.size > 0;
   const notFoundCount = items.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
   const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed").length;
+  const unitMismatchCount = items.filter((i) => i.product && hasUnitMismatch(i.unit, i.product.unit)).length;
 
   const extraColumnKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -82,6 +104,14 @@ export function ResultsTable({
                 Vše zkontrolováno
               </span>
             ) : null}
+            {unitMismatchCount > 0 && !isSearching && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                </svg>
+                {unitMismatchCount} nesoulad MJ
+              </span>
+            )}
             {isSearching && (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-kv-red/10 bg-kv-red/5 px-2.5 py-1 text-[11px] font-medium text-kv-red">
                 <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -209,10 +239,22 @@ export function ResultsTable({
                   </td>
                   <td className="px-4 py-2.5 text-sm tabular-nums text-kv-dark">
                     {item.quantity != null ? (
-                      <>
-                        {item.quantity}
-                        {item.unit && <span className="ml-1 text-kv-gray-400">{item.unit}</span>}
-                      </>
+                      <div className="flex items-center gap-1">
+                        <span>
+                          {item.quantity}
+                          {item.unit && <span className="ml-1 text-kv-gray-400">{item.unit}</span>}
+                        </span>
+                        {!isCurrentlySearching && item.product && hasUnitMismatch(item.unit, item.product.unit) && (
+                          <span
+                            title={unitMismatchLabel(item.unit!, item.product.unit!)}
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 cursor-help"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                            </svg>
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-kv-gray-300">—</span>
                     )}

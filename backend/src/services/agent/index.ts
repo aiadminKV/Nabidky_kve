@@ -9,7 +9,7 @@ export const parserAgent = new Agent({
   instructions: `Jsi agent pro extrakci strukturovaných dat z textu poptávek pro KV Elektro – B2B distributora elektroinstalačního materiálu.
 
 Tvůj úkol: Parsuj vstupní text a vrať JSON pole položek.
-Formát každé položky: {"name": string, "quantity": number | null}
+Formát každé položky: {"name": string, "quantity": number | null, "unit": string | null}
 Vrať POUZE JSON pole, bez vysvětlování.
 
 ## Formáty vstupu
@@ -18,10 +18,26 @@ Vrať POUZE JSON pole, bez vysvětlování.
 - Smíšené formáty s různými jednotkami (ks, m, bal, kus, kusů)
 - Množství může být před i za názvem produktu ("5x jistič" nebo "jistič 5 ks")
 
+## KRITICKÉ PRAVIDLO: Rozlišuj technické parametry od množství
+
+Elektrotechnické produkty obsahují čísla, která jsou SOUČÁSTÍ NÁZVU/SPECIFIKACE, NE množstvím:
+- **A** (ampéry): 10A, 16A, 25A, 40A, 63A → parametr produktu (jmenovitý proud)
+- **V** (volty): 230V, 400V → parametr produktu (napětí)
+- **W** (watty): 60W, 100W → parametr produktu (příkon)
+- **mA** (miliampéry): 30mA, 100mA → parametr produktu (reziduální proud)
+- **pol** (póly): 2-pol, 4-pol, 3-pol → parametr produktu (počet pólů)
+- **f** (fáze): 1f, 3f → parametr produktu (počet fází)
+- **mm²**: 1.5, 2.5, 4, 6 → parametr produktu (průřez vodiče)
+- **IP** + číslo: IP44, IP65 → parametr produktu (krytí)
+
+Množství je POUZE číslo s jednotkou množství: **ks, kus, kusů, m, metr, bal, balení, kg, sada, set, role**
+Nebo samostatné číslo na konci řádku / za tabulátorem bez technické jednotky.
+
 ## Elektrotechnické zkratky – zachovej je přesně jak jsou
 Zákazníci používají zkratky jako B3x16, FI 2P 30mA, CYKY 3x2,5 – tyto zkratky NEROZPISUJ, zachovej je v poli "name" přesně jak jsou zapsány. Vyhledávací agent je rozepíše sám.
 
 ## Příklady
+
 Vstup:
   Jistič B3x16 - 5ks
   Kabel CYKY 3x2,5 - 100m
@@ -29,9 +45,25 @@ Vstup:
 
 Výstup:
 [
-  {"name": "Jistič B3x16", "quantity": 5},
-  {"name": "Kabel CYKY 3x2,5", "quantity": 100},
-  {"name": "FI 2P 25A 30mA", "quantity": 3}
+  {"name": "Jistič B3x16", "quantity": 5, "unit": "ks"},
+  {"name": "Kabel CYKY 3x2,5", "quantity": 100, "unit": "m"},
+  {"name": "FI 2P 25A 30mA", "quantity": 3, "unit": null}
+]
+
+Vstup:
+  Jističochranic 10A  12ks
+  Přepěťová ochrana B+C 4-pol  24ks
+  Vypínač 3f 40A 24ks
+  Proudový chránič 40A 4-pol 25ks
+  Jistič 3f 16A 48ks
+
+Výstup:
+[
+  {"name": "Jističochranic 10A", "quantity": 12, "unit": "ks"},
+  {"name": "Přepěťová ochrana B+C 4-pol", "quantity": 24, "unit": "ks"},
+  {"name": "Vypínač 3f 40A", "quantity": 24, "unit": "ks"},
+  {"name": "Proudový chránič 40A 4-pol", "quantity": 25, "unit": "ks"},
+  {"name": "Jistič 3f 16A", "quantity": 48, "unit": "ks"}
 ]`,
   model: "gpt-4.1-mini",
   tools: [],
@@ -108,6 +140,19 @@ vždy pracuj s EXISTUJÍCÍMI pozicemi. Neutvářej duplicity.
 - **parse_items_from_text** — pouze parsuj seznam položek BEZ vyhledávání.
   Použij jen když uživatel výslovně říká "jen je vypiš" nebo "neprohledávej".
 
+## KRITICKÉ PRAVIDLO: Rozlišuj technické parametry od množství
+Při extrakci položek z textu NIKDY nezaměňuj technické specifikace produktu za množství:
+- **A** (10A, 16A, 25A, 40A) = jmenovitý proud → SOUČÁST NÁZVU
+- **V** (230V, 400V) = napětí → SOUČÁST NÁZVU
+- **W** (60W, 100W) = příkon → SOUČÁST NÁZVU
+- **mA** (30mA, 100mA) = reziduální proud → SOUČÁST NÁZVU
+- **pol** (2-pol, 4-pol) = počet pólů → SOUČÁST NÁZVU
+- **f** (1f, 3f) = počet fází → SOUČÁST NÁZVU
+- **mm²** (1.5, 2.5, 4) = průřez vodiče → SOUČÁST NÁZVU
+
+Množství je POUZE číslo s: **ks, kus, kusů, m, bal, kg, sada, role** nebo samostatné číslo na konci.
+Příklad: "Jistič 3f 16A 48ks" → name: "Jistič 3f 16A", quantity: 48, unit: "ks"
+
 ## Obrázky, PDF, Excel a hlasové zprávy
 Umíš analyzovat obrázky (fotky poptávek, tabulky, screenshoty) a PDF soubory přiložené k zprávě.
 Excel/CSV soubory jsou automaticky rozparsovány a obsah ti přijde jako TSV tabulka v textu zprávy.
@@ -130,12 +175,21 @@ Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s
 - Pokud je v tabulce sloupec s kódem produktu (SKU), použij ho v poli "name" formou "název (SKU: kód)".
 - Ignoruj řádky, které jsou zjevně sumační, prázdné nebo hlavičkové.
 
+## Měrné jednotky a balení kabelů/vodičů
+- VŽDY předávej měrnou jednotku (unit) z poptávky do process_items / search_product.
+- Katalog obsahuje kabely v různých baleních: kruhy (25m, 50m, 100m), bubny (500m, 1000m), metráž (m).
+- Při poptávce kabelů/vodičů v metrech zvol variantu, jejíž násobky sedí na poptávané množství:
+  - Poptávka "CYKY 3x1,5 350m" → zvol kruh 50m (7×50=350), NE buben 500m.
+  - Poptávka "CYKY 3x2,5 100m" → zvol kruh 100m (1×100=100).
+  - Poptávka "CYKY 3x1,5 80m" → zvol kruh 100m nebo 2×50m — vyber ekonomičtější variantu.
+- Pokud MJ poptávky neodpovídá MJ produktu (např. "ks" vs "m"), upozorni na to ve shrnutí.
+
 ## Jak pracuješ
 1. Jednej okamžitě — jakmile pochopíš záměr, začni.
 2. NOVÉ položky z externího vstupu → process_items.
 3. Modifikace EXISTUJÍCÍCH položek → search_product + replace_product_in_offer pro každou pozici.
 4. Jednotlivý ad-hoc dotaz → search_product + add_item_to_offer.
-5. Stručné shrnutí na konci — napiš co jsi udělal.
+5. Stručné shrnutí na konci — napiš co jsi udělal. Pokud u některých položek nesedí MJ, upozorni na to.
 6. Informační dotazy — odpověz jen textem.`;
 
 /**
@@ -159,13 +213,15 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
       "You do NOT need to iterate or reformulate — the pipeline does it for you.",
     parameters: z.object({
       query: z.string().describe("Product name or description to search for"),
+      unit: z.string().nullable().default(null).describe("Demand unit (ks, m, bal…) for unit-aware matching"),
+      quantity: z.number().nullable().default(null).describe("Demand quantity for packaging optimization"),
     }),
-    async execute({ query }) {
+    async execute({ query, unit, quantity }) {
       await onEvent({ type: "tool_activity", tool: "search_product", data: { status: "start", query } });
-      await onEvent({ type: "debug", tool: "search_product", data: { query } });
+      await onEvent({ type: "debug", tool: "search_product", data: { query, unit, quantity } });
       try {
         const result = await searchPipelineForItem(
-          { name: query, unit: null, quantity: null },
+          { name: query, unit, quantity },
           0,
           (entry) => {
             void Promise.resolve(onEvent({ type: "debug", tool: "search_product", data: entry })).catch(() => {});

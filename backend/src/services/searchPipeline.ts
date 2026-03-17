@@ -230,7 +230,15 @@ Pokud confidence < 60, přidej pole "refinement":
   }
 }
 
-### candidates: max 5 SKU kódů top kandidátů. VŽDY uveď alespoň top kandidáty, i při not_found.`;
+### candidates: max 5 SKU kódů top kandidátů. VŽDY uveď alespoň top kandidáty, i při not_found.
+
+## Měrné jednotky a balení
+Pokud dostaneš informaci o poptávané měrné jednotce (demandUnit) a množství (demandQuantity):
+1. PREFERUJ kandidáty, jejichž měrná jednotka odpovídá poptávce.
+2. U kabelů a vodičů prodávaných v kruzích/bubnech: zvol takový kruh/buben, jehož násobky sedí na poptávané množství.
+   Např. poptávka "CYKY 3x1,5 350m" → preferuj kruh 50m (7×50=350), NE buben 500m.
+3. Pokud žádný kandidát nemá odpovídající MJ, vyber nejlepší shodu a upozorni v reasoning, že MJ se liší.`;
+
 
 function buildMetadata(candidates: MergedCandidate[]) {
   const subDist: Record<string, number> = {};
@@ -261,6 +269,8 @@ async function evaluate(
   candidates: MergedCandidate[],
   categoryTree?: CategoryTreeEntry[],
   instruction?: string | null,
+  demandUnit?: string | null,
+  demandQuantity?: number | null,
 ): Promise<EvalResult> {
   if (candidates.length === 0) {
     return {
@@ -276,6 +286,7 @@ async function evaluate(
   const top20 = candidates.slice(0, 20).map((c) => ({
     sku: c.sku,
     name: c.name,
+    unit: c.unit,
     manufacturer_code: c.manufacturer_code,
     manufacturer: c.manufacturer,
     subcategory: c.subcategory,
@@ -292,6 +303,12 @@ async function evaluate(
 
   if (instruction) {
     payload.instruction = instruction;
+  }
+  if (demandUnit) {
+    payload.demandUnit = demandUnit;
+  }
+  if (demandQuantity != null) {
+    payload.demandQuantity = demandQuantity;
   }
 
   if (categoryTree) {
@@ -429,7 +446,7 @@ export async function searchPipelineForItem(
     });
 
     // Step 5: AI Evaluation
-    let evalResult = await evaluate(item.name, merged, undefined, item.instruction);
+    let evalResult = await evaluate(item.name, merged, undefined, item.instruction, item.unit, item.quantity);
     onDebug?.({
       position,
       step: "evaluation",
@@ -480,7 +497,7 @@ export async function searchPipelineForItem(
       }));
       merged = mergeWithExisting(merged, fresh);
 
-      evalResult = await evaluate(item.name, merged, categoryTree, item.instruction);
+      evalResult = await evaluate(item.name, merged, categoryTree, item.instruction, item.unit, item.quantity);
       onDebug?.({
         position,
         step: "refinement_eval",
