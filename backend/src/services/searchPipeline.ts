@@ -4,20 +4,39 @@ import { generateQueryEmbedding } from "./embedding.js";
 import {
   searchProductsSemantic,
   searchProductsFulltext,
+  lookupProductsExact,
   getCategoryTree,
   type SemanticResult,
+  type FulltextResult,
+  type ExactResult,
   type CategoryTreeEntry,
   type ProductResult,
+  type StockFilterOptions,
 } from "./search.js";
 
-const REFORMULATE_MODEL = "gpt-4.1";
-const EVALUATE_MODEL = "gpt-4.1";
-const MAX_RESULTS = 30;
+const PIPELINE_MODEL = "gpt-5-mini";
+const MAX_RESULTS_FULLTEXT = 30;
+const MAX_RESULTS_SEMANTIC = 50;
 const SIM_THRESHOLD = 0.35;
-const REFINEMENT_CONFIDENCE = 60;
 const MAX_REFINEMENTS = 2;
 
 // ── Types ──────────────────────────────────────────────────
+
+export type OfferType = "vyberko" | "realizace";
+
+export interface SearchPreferences {
+  offerType: OfferType;
+  stockFilter: "any" | "in_stock" | "stock_items_only";
+  branchFilter: string | null;
+  priceStrategy: "lowest" | "standard";
+}
+
+export const DEFAULT_PREFERENCES: SearchPreferences = {
+  offerType: "realizace",
+  stockFilter: "any",
+  branchFilter: null,
+  priceStrategy: "standard",
+};
 
 export interface ParsedItem {
   name: string;
@@ -36,8 +55,14 @@ export interface PipelineResult {
   product: Partial<ProductResult> | null;
   candidates: Array<Partial<ProductResult>>;
   reasoning: string;
+  priceNote: string | null;
   reformulatedQuery: string;
   pipelineMs: number;
+}
+
+export interface GroupContext {
+  preferredManufacturer: string | null;
+  preferredLine: string | null;
 }
 
 export type PipelineDebugFn = (entry: {
@@ -46,21 +71,177 @@ export type PipelineDebugFn = (entry: {
   data: unknown;
 }) => void;
 
-interface MergedCandidate extends SemanticResult {
-  source: "raw" | "reformulated" | "fulltext" | "both";
+interface MergedCandidate extends ProductResult {
+  cosine_similarity: number;
+  source: "raw" | "reformulated" | "fulltext" | "exact" | "both";
 }
 
-interface EvalResult {
-  matchType: "match" | "uncertain" | "multiple" | "alternative" | "not_found";
-  confidence: number;
-  selectedSku: string | null;
-  candidates: string[];
+interface MatcherShortlistEntry {
+  sku: string;
+  matchScore: number;
+  paramMatch: "full" | "partial" | "type_only";
+  reasoning: string;
+}
+
+interface MatcherResult {
+  shortlist: MatcherShortlistEntry[];
+  bestMatchType: "match" | "uncertain" | "not_found";
   reasoning: string;
   refinement?: {
     action: "refine_search";
     query: string;
     subcategory: string | null;
     manufacturer: string | null;
+  };
+}
+
+interface SelectorResult {
+  selectedSku: string | null;
+  matchType: "match" | "uncertain" | "multiple" | "alternative" | "not_found";
+  confidence: number;
+  reasoning: string;
+  priceNote: string | null;
+}
+
+// ── Planning Agent ─────────────────────────────────────────
+
+export interface SearchPlanGroup {
+  groupName: string;
+  category: string | null;
+  suggestedManufacturer: string | null;
+  suggestedLine: string | null;
+  notes: string | null;
+  itemIndices: number[];
+}
+
+export interface SearchPlan {
+  groups: SearchPlanGroup[];
+  enrichedItems: Array<ParsedItem & { groupIndex: number }>;
+}
+
+const PLANNING_PROMPT = `Jsi plánovací agent pro B2B elektroinstalační katalog KV Elektro (~471K položek).
+
+## Tvůj úkol
+Dostaneš seznam rozparsovaných položek z poptávky. Analyzuj VŠECHNY najednou a:
+
+1. **Seskup** položky do logických skupin podle typu produktu / kategorie (jističe, kabely, svítidla, zásuvky, rozvaděčové komponenty atd.)
+2. **Navrhni** pro každou skupinu preferovaného výrobce a produktovou řadu, pokud to lze z kontextu odvodit
+3. **Obohatí** každou položku instrukcí pro vyhledávací pipeline
+
+## Jak seskupovat
+- Položky stejného typu do jedné skupiny (všechny jističe, všechny kabely, atd.)
+- Pokud poptávka obsahuje výrobce (např. "ABB jistič"), nastav ho jako suggestedManufacturer pro celou skupinu
+- Pokud je zmíněna řada/model (např. "Tango", "S200"), nastav suggestedLine
+- Pokud nelze odvodit výrobce/řadu, nech null
+
+## Jak obohacovat instrukce
+Pro každou položku vytvoř pole "instruction" jako text pro vyhledávací AI:
+- Pokud je znám výrobce: "Preferuj výrobce: ABB"
+- Pokud je známa řada: "Preferuj výrobce: ABB, řada: S200"
+- Pokud je stejná barva pro skupinu: "Preferuj výrobce: Schneider, řada: Unica, barva: bílá"
+- Pokud není co dodat, instrukce = null
+
+## Kontext nabídky
+Pokud dostaneš "offerContext", zohledni ho:
+- REALIZACE = standardní dodavatelé, spolehlivé řady
+- VÝBĚRKO = nejnižší cena, i od méně známých dodavatelů
+
+## Formát odpovědi
+Vrať VÝHRADNĚ JSON:
+{
+  "groups": [
+    {
+      "groupName": "Jističe",
+      "category": "jistic",
+      "suggestedManufacturer": "ABB",
+      "suggestedLine": "S200",
+      "notes": "Zákazník specifikoval ABB",
+      "itemIndices": [0, 1, 4]
+    }
+  ],
+  "enrichedItems": [
+    {
+      "index": 0,
+      "instruction": "Preferuj výrobce: ABB, řada: S200"
+    }
+  ]
+}
+
+### Pravidla
+- itemIndices = 0-based index v původním poli items
+- Každá položka MUSÍ být v právě jedné skupině
+- enrichedItems musí obsahovat záznam pro KAŽDOU položku (i s instruction: null)
+- Skupin může být 1 (všechno stejná kategorie) i N
+- Neměň name, quantity, unit — jen přidáváš instruction a seskupuješ`;
+
+export async function createSearchPlan(
+  items: ParsedItem[],
+  preferences?: SearchPreferences,
+): Promise<SearchPlan> {
+  const payload: Record<string, unknown> = {
+    items: items.map((item, i) => ({
+      index: i,
+      name: item.name,
+      unit: item.unit,
+      quantity: item.quantity,
+    })),
+  };
+
+  if (preferences) {
+    payload.offerContext =
+      preferences.offerType === "vyberko"
+        ? "Typ nabídky: VÝBĚRKO — preferuj nejnižší cenu."
+        : "Typ nabídky: REALIZACE — preferuj standardní dodavatele a dostupnost.";
+  }
+
+  const content = await chatComplete({
+    system: PLANNING_PROMPT,
+    user: JSON.stringify(payload),
+    json: true,
+  });
+  if (!content) {
+    return buildFallbackPlan(items);
+  }
+
+  try {
+    const parsed = JSON.parse(content) as {
+      groups: SearchPlanGroup[];
+      enrichedItems: Array<{ index: number; instruction: string | null }>;
+    };
+
+    const enrichedItems: Array<ParsedItem & { groupIndex: number }> = items.map((item, i) => {
+      const enrichment = parsed.enrichedItems.find((e) => e.index === i);
+      const groupIdx = parsed.groups.findIndex((g) => g.itemIndices.includes(i));
+      return {
+        ...item,
+        instruction: enrichment?.instruction ?? item.instruction ?? null,
+        groupIndex: Math.max(0, groupIdx),
+      };
+    });
+
+    return {
+      groups: parsed.groups,
+      enrichedItems,
+    };
+  } catch {
+    return buildFallbackPlan(items);
+  }
+}
+
+function buildFallbackPlan(items: ParsedItem[]): SearchPlan {
+  return {
+    groups: [{
+      groupName: "Všechny položky",
+      category: null,
+      suggestedManufacturer: null,
+      suggestedLine: null,
+      notes: null,
+      itemIndices: items.map((_, i) => i),
+    }],
+    enrichedItems: items.map((item) => ({
+      ...item,
+      groupIndex: 0,
+    })),
   };
 }
 
@@ -83,14 +264,61 @@ function openai(): OpenAI {
   return new OpenAI({ apiKey: env.OPENAI_API_KEY });
 }
 
+/**
+ * Wrapper that handles GPT-5-mini API differences:
+ * - `max_completion_tokens` instead of `max_tokens`
+ * - `reasoning_effort: "minimal"` (no custom temperature)
+ */
+async function chatComplete(opts: {
+  system: string;
+  user: string;
+  json?: boolean;
+}): Promise<string | null> {
+  const params = {
+    model: PIPELINE_MODEL,
+    reasoning_effort: "minimal" as const,
+    max_completion_tokens: 16000,
+    ...(opts.json ? { response_format: { type: "json_object" as const } } : {}),
+    messages: [
+      { role: "system" as const, content: opts.system },
+      { role: "user" as const, content: opts.user },
+    ],
+  };
+  const res = await openai().chat.completions.create(
+    params as unknown as OpenAI.ChatCompletionCreateParamsNonStreaming,
+  );
+  return res.choices[0]?.message?.content ?? null;
+}
+
 // ── Step 1: LLM Reformulation ─────────────────────────────
 
-const REFORM_PROMPT = `Přeformuluj název elektrotechnického produktu do nejpopisnější možné formy pro sémantické vyhledávání v českém B2B katalogu elektroinstalačního materiálu.
+const REFORM_PROMPT = `Přeformuluj název elektrotechnického produktu do formy, která nejlépe odpovídá českému B2B katalogu elektroinstalačního materiálu (KV Elektro).
 
-PRAVIDLA:
-1. VŽDY přeformuluj — rozviň zkratky, přidej odborný kontext
+## PRAVIDLA
+1. VŽDY přeformuluj — rozviň zkratky, přidej odborný kontext, přidej alternativní názvy
 2. Pokud zkratce NEROZUMÍŠ, ponech originální text — NIKDY nevymýšlej
 3. Zachovej specifické kódy výrobce, SKU, EAN beze změny (přidej kontext vedle)
+4. Používej × místo x u průřezů kabelů (5×2,5 ne 5x2,5)
+5. Přidej i katalogový styl názvu — v katalogu se produkty jmenují jinak než v poptávkách
+
+## PŘÍKLADY KONVERZE (poptávka → katalogový styl)
+- "jistič 1-pólový 16 A B" → "JISTIC PL6-B16/1 jistič jednopólový 16A charakteristika B"
+- "jistič 3-pólový 25 A B 10kA" → "JISTIC PL6-B25/3 jistič třípólový 25A B"
+- "chránič proudový 1+N pólový 16A typ B" → "chranic PFGM-16/2/003-B proudový chránič 16A 2P typ B"
+- "Datový kabel UTP CAT6 LSOH" → "KABEL SXKD-6-UTP-LSOH datový kabel UTP kategorie 6 Cat6 bezhalogenový"
+- "kabel instalační ... (CYKY) 3x1,5mm2" → "KABEL 1-CYKY-J 3x1,5 CYKY kabel instalační 3×1,5"
+- "Vodič CY 6" → "VODIC H07V-U 1x6 CY vodič 6mm2 jednodrátový"
+- "Vodič CYA 35" → "VODIC H07V-K 1x35 CYA vodič 35mm2 lanovaný"
+- "H07V-K 6mm2" → "VODIC H07V-K 1x6 vodič lanovaný 6mm2 CYA"
+- "CXKH-R-J 5×2,5" → "KABEL 1-CXKH-R-J 5x2,5 B2CAS1D0 kabel bezhalogenový požárně odolný"
+- "rozvodnice nástěnná 72 modulů" → "ROZVODNICE rozváděčová skříň nástěnná 72 modulů IP41"
+- "trubka ohebná pr. 20mm" → "TRUBKA ohebná elektroinstalační ohebná 20mm PVC"
+
+## DŮLEŽITÉ
+- V katalogu mají kabely prefix "1-" (např. 1-CYKY-J, 1-CXKH-R-J)
+- V katalogu se vodiče značí H07V-U (drátový=CY) a H07V-K (lanovaný=CYA)
+- Jističe se v katalogu značí jako PL6-BAMP/POLES nebo podobně
+- Vždy přidej jak katalogový kód, tak popisný text pro lepší vyhledávání
 
 Vrať plain text — jen přeformulovaný název.`;
 
@@ -99,19 +327,11 @@ async function reformulate(name: string, instruction?: string | null): Promise<s
     ? `${name}\n\nDodatečný kontext: ${instruction}`
     : name;
 
-  const res = await openai().chat.completions.create({
-    model: REFORMULATE_MODEL,
-    messages: [
-      { role: "system", content: REFORM_PROMPT },
-      { role: "user", content: userContent },
-    ],
-    temperature: 0.2,
-    max_tokens: 200,
-  });
-  return res.choices[0]?.message?.content?.trim() ?? name;
+  const content = await chatComplete({ system: REFORM_PROMPT, user: userContent });
+  return content?.trim() ?? name;
 }
 
-// ── Step 4: Merge ──────────────────────────────────────────
+// ── Merge Helpers ──────────────────────────────────────────
 
 function mergeResults(
   raw: SemanticResult[],
@@ -164,199 +384,308 @@ function mergeWithExisting(
   );
 }
 
-// ── Fulltext → MergedCandidate conversion ─────────────────
-
-function fulltextToMerged(results: ProductResult[]): MergedCandidate[] {
+function fulltextToMerged(results: FulltextResult[]): MergedCandidate[] {
   return results.map((r) => ({
-    id: r.id,
-    sku: r.sku,
-    name: r.name,
-    name_secondary: r.name_secondary,
-    unit: r.unit,
-    price: r.price,
-    ean: r.ean,
-    manufacturer_code: r.manufacturer_code,
-    manufacturer: r.manufacturer,
-    category: r.category,
-    subcategory: r.subcategory,
-    sub_subcategory: r.sub_subcategory,
-    eshop_url: r.eshop_url,
+    ...r,
     cosine_similarity: 0.5 + Math.max(r.rank ?? 0, r.similarity_score ?? 0) * 0.3,
     source: "fulltext" as const,
   }));
 }
 
-// ── Step 5: AI Evaluation ──────────────────────────────────
+const EXACT_COSINE: Record<string, number> = {
+  sku_exact: 1.0,
+  ean_exact: 0.98,
+  idnlf_exact: 0.98,
+  ean_contains: 0.90,
+  idnlf_contains: 0.90,
+};
 
-const EVAL_PROMPT = `Jsi hodnotitel výsledků vyhledávání v B2B katalogu elektroinstalačního materiálu (KV Elektro, ~470K položek).
-
-Dostaneš originální název produktu z poptávky a seznam kandidátů z vyhledávání.
-
-## Tvůj úkol
-Vyhodnoť, zda některý kandidát odpovídá hledanému produktu.
-
-## Jak hodnotit
-1. **Název produktu je klíčový** — pokud název kandidáta obsahuje stejné klíčové slovo jako poptávka (např. "CY 10" v "VODIC CY 10 HNEDA"), je to silný signál přesné shody. Neignoruj to.
-2. **Technické parametry** — proud (A), póly (P), napětí (V), IP krytí, průřez (mm²), wattáž (W)
-3. **Subcategorie** — odpovídá typ produktu očekávání?
-4. **source: "fulltext"** = nalezeno přes textovou shodu klíčových slov — silný signál, že jde o přesný produkt
-5. **Blízké parametry jsou OK** — pokud poptávka říká "23.1W" a katalog má "24W" nebo "25W", je to relevantní alternativa, NE not_found
-
-## DŮLEŽITÉ — správné použití matchType
-
-- **not_found** = v kandidátech NENÍ NIC relevantního. Žádný kandidát se ani vzdáleně netýká hledaného produktu. NEPOUŽÍVEJ not_found jen proto, že dotaz je obecný (např. "Svorka WAGO" — to je "multiple", ne "not_found").
-- **multiple** = existuje VÍCE vhodných kandidátů stejného typu a nelze bez dalšího upřesnění vybrat jeden (např. "Svorka WAGO" → stovky variant, "Vypínač řazení 6" → desítky variant od různých výrobců). Vyber libovolného top kandidáta jako selectedSku.
-- **match** = jsem si jistý, že kandidát odpovídá poptávce (confidence 85-100)
-- **uncertain** = pravděpodobně správný, ale ne 100% (confidence 60-84)
-- **alternative** = není přesná shoda, ale nabízím nejbližší alternativu (confidence 30-59)
-
-## Formát odpovědi
-Vrať VÝHRADNĚ JSON:
-{
-  "matchType": "match" | "uncertain" | "multiple" | "alternative" | "not_found",
-  "confidence": 0-100,
-  "selectedSku": "SKU vybraného produktu nebo null",
-  "candidates": ["SKU1", "SKU2", ...],
-  "reasoning": "Stručné zdůvodnění (1 věta česky)"
+function exactToMerged(results: ExactResult[]): MergedCandidate[] {
+  return results.map((r) => ({
+    ...r,
+    cosine_similarity: EXACT_COSINE[r.match_type] ?? 0.95,
+    source: "exact" as const,
+  }));
 }
 
-Pokud confidence < 60, přidej pole "refinement":
+// ── Tier 1: MATCHER — product type + parameter matching ───
+
+const MATCHER_PROMPT = `Jsi expert na párování elektroinstalačních produktů. Tvůj JEDINÝ úkol: najít kandidáty, kteří odpovídají hledanému produktu TYPEM a PARAMETRY.
+
+NEHODNOTÍŠ cenu, sklad, výrobce, dostupnost. Hodnotíš POUZE:
+1. Je to STEJNÝ TYP produktu? (jistič, kabel, vodič, svítidlo, zásuvka...)
+2. Sedí KLÍČOVÉ PARAMETRY? (proud, póly, průřez, počet žil, IP, wattáž...)
+
+## Vstup
+Dostaneš originální název z poptávky a seznam raw kandidátů z vyhledávání. VĚTŠINA kandidátů je šum — to je normální.
+
+## Postup
+1. Urči TYP produktu z poptávky.
+2. Projdi kandidáty a vyřaď všechny jiného typu.
+3. U zbylých ověř shodu klíčových parametrů.
+4. Vrať SHORTLIST max 8 nejlepších seřazený od nejlepšího.
+
+## POZOR — běžné záměny (NIKDY nezaměňuj!)
+- jistič ≠ pojistka (jiný produkt!)
+- CY (drátový, H07V-U) ≠ CYA (lanovaný, H07V-K)
+- CYKY ≠ CXKH (PVC vs bezhalogenový)
+- UTP ≠ FTP (nestíněný vs stíněný)
+- CXKH-R ≠ CXKH-V (kulatý vs plochý)
+- -J ≠ -O (s/bez ochranného vodiče)
+
+## Měrné jednotky
+U kabelů/vodičů v m: preferuj největší kruh jehož násobek = poptávané množství (200m → 2×100m > 4×50m). Pokud žádný → buben. Nikdy nevolej not_found jen kvůli MJ.
+
+## matchScore
+- 90-100: PŘESNÁ shoda typu + všech klíčových parametrů
+- 70-89: Typ sedí, většina parametrů sedí (chybí barva, přesný model)
+- 50-69: Typ sedí, ale parametry se liší (jiný proud, jiný průřez)
+- <50: Nezařazuj do shortlistu
+
+## paramMatch
+- "full": Typ + všechny parametry sedí
+- "partial": Typ sedí, ne všechny parametry
+- "type_only": Správný typ ale parametry se výrazně liší
+
+## Odpověď
+Vrať VÝHRADNĚ JSON:
+{
+  "shortlist": [
+    { "sku": "...", "matchScore": 95, "paramMatch": "full", "reasoning": "1 věta" }
+  ],
+  "bestMatchType": "match" | "uncertain" | "not_found",
+  "reasoning": "Celkové zhodnocení (1 věta česky)"
+}
+
+Pokud shortlist je prázdný nebo bestMatchType = "not_found", přidej pole "refinement":
 {
   "refinement": {
     "action": "refine_search",
-    "query": "upřesněný dotaz pro embedding",
-    "subcategory": "subcategorie z dostupného stromu kategorií, nebo null",
-    "manufacturer": "výrobce pro filtr nebo null"
+    "query": "upřesněný dotaz",
+    "subcategory": "subcategorie nebo null",
+    "manufacturer": "výrobce nebo null"
   }
 }
 
-### candidates: max 5 SKU kódů top kandidátů. VŽDY uveď alespoň top kandidáty, i při not_found.
+- shortlist: max 8 položek, seřazeno od nejlepšího. Prázdný pokud žádný kandidát nesedí typem.
+- bestMatchType: "match" pokud aspoň 1 má matchScore ≥ 85, "uncertain" pokud 60-84, "not_found" pokud prázdný shortlist.`;
 
-## Měrné jednotky a balení
-Pokud dostaneš informaci o poptávané měrné jednotce (demandUnit) a množství (demandQuantity):
-1. PREFERUJ kandidáty, jejichž měrná jednotka odpovídá poptávce.
-2. U kabelů a vodičů prodávaných v kruzích/bubnech: zvol takový kruh/buben, jehož násobky sedí na poptávané množství.
-   Např. poptávka "CYKY 3x1,5 350m" → preferuj kruh 50m (7×50=350), NE buben 500m.
-3. Pokud žádný kandidát nemá odpovídající MJ, vyber nejlepší shodu a upozorni v reasoning, že MJ se liší.`;
-
-
-function buildMetadata(candidates: MergedCandidate[]) {
-  const subDist: Record<string, number> = {};
-  const mfrDist: Record<string, number> = {};
-
-  for (const c of candidates) {
-    const key = c.subcategory ?? c.category ?? "unknown";
-    subDist[key] = (subDist[key] ?? 0) + 1;
-    if (c.manufacturer) {
-      mfrDist[c.manufacturer] = (mfrDist[c.manufacturer] ?? 0) + 1;
-    }
-  }
-
-  return {
-    totalCandidates: candidates.length,
-    topSimilarity: candidates[0]?.cosine_similarity ?? 0,
-    sim10th:
-      candidates[Math.min(9, candidates.length - 1)]?.cosine_similarity ?? 0,
-    sim30th:
-      candidates[Math.min(29, candidates.length - 1)]?.cosine_similarity ?? 0,
-    subcategoryDistribution: subDist,
-    manufacturerDistribution: mfrDist,
-  };
-}
-
-async function evaluate(
+async function matchCandidates(
   originalName: string,
   candidates: MergedCandidate[],
-  categoryTree?: CategoryTreeEntry[],
-  instruction?: string | null,
   demandUnit?: string | null,
   demandQuantity?: number | null,
-): Promise<EvalResult> {
+): Promise<MatcherResult> {
   if (candidates.length === 0) {
-    return {
-      matchType: "not_found",
-      confidence: 0,
-      selectedSku: null,
-      candidates: [],
-      reasoning: "Žádní kandidáti nalezeni.",
-    };
+    return { shortlist: [], bestMatchType: "not_found", reasoning: "Žádní kandidáti." };
   }
 
-  const meta = buildMetadata(candidates);
   const top20 = candidates.slice(0, 20).map((c) => ({
     sku: c.sku,
     name: c.name,
     unit: c.unit,
-    manufacturer_code: c.manufacturer_code,
-    manufacturer: c.manufacturer,
-    subcategory: c.subcategory,
-    sub_subcategory: c.sub_subcategory,
+    category_sub: c.category_sub,
+    category_line: c.category_line,
     similarity: Math.round(c.cosine_similarity * 1000) / 1000,
     source: c.source,
   }));
 
-  const payload: Record<string, unknown> = {
-    originalName,
-    ...meta,
-    candidates: top20,
-  };
+  const payload: Record<string, unknown> = { originalName, candidates: top20 };
+  if (demandUnit) payload.demandUnit = demandUnit;
+  if (demandQuantity != null) payload.demandQuantity = demandQuantity;
 
-  if (instruction) {
-    payload.instruction = instruction;
-  }
-  if (demandUnit) {
-    payload.demandUnit = demandUnit;
-  }
-  if (demandQuantity != null) {
-    payload.demandQuantity = demandQuantity;
-  }
-
-  if (categoryTree) {
-    const compactTree = [...new Set(categoryTree.map((e) => e.subcategory))];
-    payload.availableSubcategories = compactTree;
-  }
-
-  const res = await openai().chat.completions.create({
-    model: EVALUATE_MODEL,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: EVAL_PROMPT },
-      { role: "user", content: JSON.stringify(payload) },
-    ],
-    temperature: 0.1,
-    max_tokens: 500,
+  const content = await chatComplete({
+    system: MATCHER_PROMPT,
+    user: JSON.stringify(payload),
+    json: true,
   });
-
-  const content = res.choices[0]?.message?.content;
-  if (!content) {
-    return {
-      matchType: "not_found",
-      confidence: 0,
-      selectedSku: null,
-      candidates: [],
-      reasoning: "AI evaluace selhala.",
-    };
-  }
+  if (!content) return { shortlist: [], bestMatchType: "not_found", reasoning: "AI matcher selhala." };
 
   try {
-    const p = JSON.parse(content) as EvalResult;
+    const p = JSON.parse(content);
     return {
-      matchType: p.matchType ?? "not_found",
-      confidence: Math.min(100, Math.max(0, p.confidence ?? 0)),
-      selectedSku: p.selectedSku ?? null,
-      candidates: (p.candidates ?? []).slice(0, 5),
+      shortlist: (p.shortlist ?? []).slice(0, 8),
+      bestMatchType: p.bestMatchType ?? "not_found",
       reasoning: p.reasoning ?? "",
       refinement: p.refinement,
     };
   } catch {
+    return { shortlist: [], bestMatchType: "not_found", reasoning: "Parse error." };
+  }
+}
+
+// ── Tier 2: SELECTOR — business rules ─────────────────────
+
+const SELECTOR_PROMPT = `Jsi obchodní rozhodovatel pro elektroinstalační nabídky. Dostaneš SHORTLIST produktů, které již prošly produktovou shodou (typ a parametry sedí). Tvůj úkol: vybrat NEJLEPŠÍ variantu podle obchodních pravidel.
+
+## Vstup
+- shortlist: kandidáti s matchScore, cenou, skladem, dodavatelem
+- offerType: "vyberko" nebo "realizace"
+- groupContext: preferovaný výrobce/řada (pokud existuje)
+- additionalCandidates: pro VÝBĚRKO — další kandidáti seřazení dle ceny, kteří mohou být levnější alternativou
+
+## Pravidla pro VÝBĚRKO
+1. Projdi shortlist I additionalCandidates
+2. Vyber NEJLEVNĚJŠÍHO kandidáta, který má matchScore ≥ 70 (nebo je v shortlistu)
+3. Při stejné ceně → preferuj skladem (has_stock = true)
+4. Při stejné ceně a skladu → preferuj is_stock_item = true
+
+## Pravidla pro REALIZACI
+Priorita (od nejvyšší po nejnižší):
+1. **Skladem** (has_stock = true) → silně preferuj
+2. **Preferovaný výrobce/řada** → preferuj POUZE pokud cenový rozdíl je přijatelný:
+   - cena ≤ 2× nejlevnější v shortlistu → OK
+   - cena 2-3× nejlevnější → jen pokud je skladem
+   - cena > 3× nejlevnější → NEVYBER, vyber levnější alternativu a vysvětli v priceNote
+3. **Cena** → při jinak rovných volbách preferuj nižší cenu
+4. **is_stock_item** = true → mírný bonus (standardní sortiment)
+
+## Price ceiling — KRITICKÉ pravidlo
+Pokud preferovaný výrobce stojí >3× více než nejlevnější alternativa STEJNÉHO typu, VŽDY vyber levnější a v priceNote uveď: "Preferovaný výrobce [X] je [N]x dražší. Vybrána levnější alternativa."
+
+## Odpověď
+Vrať VÝHRADNĚ JSON:
+{
+  "selectedSku": "SKU vybraného produktu nebo null",
+  "matchType": "match" | "uncertain" | "multiple" | "alternative" | "not_found",
+  "confidence": 0-100,
+  "reasoning": "1-2 věty česky — PROČ tuto variantu",
+  "priceNote": "varování o ceně nebo null"
+}
+
+## matchType v kontextu selectoru
+- matchScore ≥ 85 → "match"
+- matchScore 60-84 → "uncertain"
+- matchScore < 60 → "alternative"
+- Prázdný shortlist → "not_found"
+- Více kandidátů se stejným skóre → "multiple" (ale stále vyber jednoho)`;
+
+async function selectProduct(
+  originalName: string,
+  matcherResult: MatcherResult,
+  candidates: MergedCandidate[],
+  preferences?: SearchPreferences,
+  groupContext?: GroupContext,
+  demandUnit?: string | null,
+  demandQuantity?: number | null,
+): Promise<SelectorResult> {
+  if (matcherResult.shortlist.length === 0) {
     return {
+      selectedSku: null,
       matchType: "not_found",
       confidence: 0,
-      selectedSku: null,
-      candidates: [],
-      reasoning: "Nepodařilo se zparsovat AI odpověď.",
+      reasoning: matcherResult.reasoning,
+      priceNote: null,
     };
   }
+
+  const candidateMap = new Map(candidates.map((c) => [c.sku, c]));
+
+  const enrichedShortlist = matcherResult.shortlist.map((s) => {
+    const c = candidateMap.get(s.sku);
+    return {
+      sku: s.sku,
+      name: c?.name ?? "?",
+      matchScore: s.matchScore,
+      paramMatch: s.paramMatch,
+      current_price: c?.current_price ?? null,
+      supplier_name: c?.supplier_name ?? null,
+      is_stock_item: c?.is_stock_item ?? false,
+      has_stock: c?.has_stock ?? false,
+      unit: c?.unit ?? null,
+    };
+  });
+
+  const payload: Record<string, unknown> = {
+    demand: { name: originalName, unit: demandUnit, quantity: demandQuantity },
+    shortlist: enrichedShortlist,
+    offerType: preferences?.offerType ?? "realizace",
+  };
+
+  if (preferences?.offerType === "vyberko") {
+    const shortlistSkus = new Set(matcherResult.shortlist.map((s) => s.sku));
+    const additional = candidates
+      .filter((c) => !shortlistSkus.has(c.sku) && c.current_price != null)
+      .sort((a, b) => (a.current_price ?? Infinity) - (b.current_price ?? Infinity))
+      .slice(0, 10)
+      .map((c) => ({
+        sku: c.sku,
+        name: c.name,
+        current_price: c.current_price,
+        supplier_name: c.supplier_name,
+        is_stock_item: c.is_stock_item,
+        has_stock: c.has_stock,
+        unit: c.unit,
+      }));
+    if (additional.length > 0) payload.additionalCandidates = additional;
+  }
+
+  const prices = enrichedShortlist
+    .map((s) => s.current_price)
+    .filter((p): p is number => p != null);
+
+  if (prices.length > 0) {
+    payload.priceRange = {
+      min: Math.min(...prices),
+      max: Math.max(...prices),
+      avg: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
+    };
+  }
+
+  if (groupContext?.preferredManufacturer || groupContext?.preferredLine) {
+    payload.groupContext = groupContext;
+  }
+
+  const content = await chatComplete({
+    system: SELECTOR_PROMPT,
+    user: JSON.stringify(payload),
+    json: true,
+  });
+  if (!content) {
+    return {
+      selectedSku: matcherResult.shortlist[0]?.sku ?? null,
+      matchType: "uncertain",
+      confidence: 50,
+      reasoning: "Selector AI selhala, fallback na top kandidáta.",
+      priceNote: null,
+    };
+  }
+
+  try {
+    const p = JSON.parse(content);
+    return {
+      selectedSku: p.selectedSku ?? null,
+      matchType: p.matchType ?? "uncertain",
+      confidence: Math.min(100, Math.max(0, p.confidence ?? 0)),
+      reasoning: p.reasoning ?? "",
+      priceNote: p.priceNote ?? null,
+    };
+  } catch {
+    return {
+      selectedSku: matcherResult.shortlist[0]?.sku ?? null,
+      matchType: "uncertain",
+      confidence: 50,
+      reasoning: "Parse error, fallback.",
+      priceNote: null,
+    };
+  }
+}
+
+// ── Query Normalization ────────────────────────────────────
+
+/**
+ * Universal query normalization — only character-level fixes that
+ * the DB text search config can't handle on its own.
+ * Everything domain-specific (catalog codes, Czech terms) is left to
+ * the LLM reformulation step.
+ */
+function normalizeQuery(raw: string): string {
+  let q = raw;
+  q = q.replace(/×/g, "x");
+  q = q.replace(/[\u2013\u2014]/g, "-");
+  q = q.replace(/(\d)\s*mm[²2]/gi, "$1");
+  q = q.replace(/\s+/g, " ").trim();
+  return q;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -366,17 +695,43 @@ function slimCandidate(c: MergedCandidate): Partial<ProductResult> {
     id: c.id,
     sku: c.sku,
     name: c.name,
-    name_secondary: c.name_secondary,
-    manufacturer_code: c.manufacturer_code,
-    manufacturer: c.manufacturer,
-    category: c.category,
     unit: c.unit,
-    ean: c.ean,
-    price: c.price,
-    subcategory: c.subcategory,
-    sub_subcategory: c.sub_subcategory,
-    eshop_url: c.eshop_url,
+    current_price: c.current_price,
+    supplier_name: c.supplier_name,
+    category_main: c.category_main,
+    category_sub: c.category_sub,
+    category_line: c.category_line,
+    is_stock_item: c.is_stock_item,
+    has_stock: c.has_stock,
+    removed_at: c.removed_at,
   };
+}
+
+// ── Preferences → Stock filter conversion ─────────────────
+
+function prefsToStockOpts(prefs?: SearchPreferences): StockFilterOptions | undefined {
+  if (!prefs) return undefined;
+  const opts: StockFilterOptions = {};
+  if (prefs.stockFilter === "stock_items_only") opts.stockItemOnly = true;
+  if (prefs.stockFilter === "in_stock") opts.inStockOnly = true;
+  if (prefs.branchFilter) opts.branchCodeFilter = prefs.branchFilter;
+  if (!opts.stockItemOnly && !opts.inStockOnly && !opts.branchCodeFilter) return undefined;
+  return opts;
+}
+
+function applyStockPostFilter(
+  candidates: MergedCandidate[],
+  prefs?: SearchPreferences,
+): MergedCandidate[] {
+  if (!prefs) return candidates;
+  let filtered = candidates;
+  if (prefs.stockFilter === "stock_items_only") {
+    filtered = filtered.filter((c) => c.is_stock_item);
+  }
+  if (prefs.stockFilter === "in_stock") {
+    filtered = filtered.filter((c) => c.has_stock);
+  }
+  return filtered;
 }
 
 // ── Main Pipeline ──────────────────────────────────────────
@@ -385,159 +740,159 @@ export async function searchPipelineForItem(
   item: ParsedItem,
   position: number,
   onDebug?: PipelineDebugFn,
+  preferences?: SearchPreferences,
+  groupContext?: GroupContext,
 ): Promise<PipelineResult> {
   const t0 = Date.now();
+  const stockOpts = prefsToStockOpts(preferences);
 
   try {
-    // Step 1: LLM Reformulation
-    const reformulated = await reformulate(item.name, item.instruction);
-    onDebug?.({
-      position,
-      step: "reformulation",
-      data: { original: item.name, reformulated },
-    });
+    const normalizedName = normalizeQuery(item.name);
+    onDebug?.({ position, step: "normalize", data: { original: item.name, normalized: normalizedName } });
 
-    // Step 2: Dual embedding + fulltext (all 3 parallel, fulltext is non-fatal)
-    const fulltextPromise = searchProductsFulltext(item.name, MAX_RESULTS).catch(() => [] as ProductResult[]);
-    const [rawEmb, refEmb, fulltextResults] = await Promise.all([
-      generateQueryEmbedding(item.name),
+    const reformulated = await reformulate(normalizedName, item.instruction);
+    onDebug?.({ position, step: "reformulation", data: { original: normalizedName, reformulated } });
+
+    // Parallel fan-out: embeddings + fulltext + exact
+    const fulltextOriginal = searchProductsFulltext(normalizedName, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
+    const fulltextReform = searchProductsFulltext(reformulated, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
+    const exactPromise = lookupProductsExact(normalizedName, 10).catch(() => [] as ExactResult[]);
+    const [rawEmb, refEmb, ftOriginal, ftReform, exactResults] = await Promise.all([
+      generateQueryEmbedding(normalizedName),
       generateQueryEmbedding(reformulated),
-      fulltextPromise,
+      fulltextOriginal,
+      fulltextReform,
+      exactPromise,
     ]);
+
+    const ftMap = new Map<string, FulltextResult>();
+    for (const r of ftOriginal) ftMap.set(r.sku, r);
+    for (const r of ftReform) {
+      const existing = ftMap.get(r.sku);
+      if (!existing || (r.rank ?? 0) > (existing.rank ?? 0)) ftMap.set(r.sku, r);
+    }
+    const fulltextResults = [...ftMap.values()];
+
     onDebug?.({
-      position,
-      step: "embedding",
-      data: { done: true, fulltextCount: fulltextResults.length },
+      position, step: "embedding",
+      data: {
+        done: true,
+        fulltextOriginalCount: ftOriginal.length,
+        fulltextReformCount: ftReform.length,
+        fulltextMergedCount: fulltextResults.length,
+        exactCount: exactResults.length,
+        exactTopMatch: exactResults[0]?.match_type ?? null,
+      },
     });
 
-    // Step 3: Dual semantic search (parallel)
+    // Dual semantic search (parallel, unfiltered)
     const [rawResults, refResults] = await Promise.all([
-      searchProductsSemantic(rawEmb, MAX_RESULTS, SIM_THRESHOLD),
-      searchProductsSemantic(refEmb, MAX_RESULTS, SIM_THRESHOLD),
+      searchProductsSemantic(rawEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD),
+      searchProductsSemantic(refEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD),
     ]);
     onDebug?.({
-      position,
-      step: "search",
+      position, step: "search",
       data: {
-        rawCount: rawResults.length,
-        refCount: refResults.length,
-        fulltextCount: fulltextResults.length,
+        rawCount: rawResults.length, refCount: refResults.length,
+        fulltextCount: fulltextResults.length, exactCount: exactResults.length,
         rawTopSim: rawResults[0]?.cosine_similarity ?? 0,
         refTopSim: refResults[0]?.cosine_similarity ?? 0,
       },
     });
 
-    // Step 4: Triple merge (semantic raw + semantic reformulated + fulltext)
+    // Quad merge + stock post-filter
     let merged = mergeResults(rawResults, refResults);
-    const fulltextMerged = fulltextToMerged(fulltextResults);
-    merged = mergeWithExisting(merged, fulltextMerged);
+    merged = mergeWithExisting(merged, fulltextToMerged(fulltextResults));
+    merged = mergeWithExisting(merged, exactToMerged(exactResults));
+    const preFilterCount = merged.length;
+    merged = applyStockPostFilter(merged, preferences);
     onDebug?.({
-      position,
-      step: "merge",
+      position, step: "merge",
       data: {
-        total: merged.length,
+        totalBeforeFilter: preFilterCount,
+        totalAfterFilter: merged.length,
         top3: merged.slice(0, 3).map((c) => ({
-          sku: c.sku,
-          name: c.name,
+          sku: c.sku, name: c.name,
           sim: Math.round(c.cosine_similarity * 1000) / 1000,
           src: c.source,
         })),
       },
     });
 
-    // Step 5: AI Evaluation
-    let evalResult = await evaluate(item.name, merged, undefined, item.instruction, item.unit, item.quantity);
+    // ── Tier 1: MATCHER — find products that match type + params
+    let matcherResult = await matchCandidates(item.name, merged, item.unit, item.quantity);
     onDebug?.({
-      position,
-      step: "evaluation",
+      position, step: "matcher",
       data: {
-        matchType: evalResult.matchType,
-        confidence: evalResult.confidence,
-        selectedSku: evalResult.selectedSku,
-        reasoning: evalResult.reasoning,
+        shortlistSize: matcherResult.shortlist.length,
+        bestMatchType: matcherResult.bestMatchType,
+        reasoning: matcherResult.reasoning,
+        topMatch: matcherResult.shortlist[0] ?? null,
       },
     });
 
-    // Step 6: Refinement loop (max MAX_REFINEMENTS attempts if confidence < 60)
-    let categoryTree: CategoryTreeEntry[] | undefined;
+    // Refinement loop: if matcher found nothing, refine search and re-match
     let attempts = 0;
     while (
-      evalResult.refinement &&
-      evalResult.confidence < REFINEMENT_CONFIDENCE &&
+      matcherResult.refinement &&
+      matcherResult.shortlist.length === 0 &&
       attempts < MAX_REFINEMENTS
     ) {
       attempts++;
-      if (!categoryTree) {
-        try {
-          categoryTree = await getCachedCategoryTree();
-        } catch {
-          categoryTree = undefined;
-        }
-      }
-      const ref = evalResult.refinement;
-      onDebug?.({
-        position,
-        step: "refinement",
-        data: { attempt: attempts, ...ref },
-      });
+      const ref = matcherResult.refinement;
+      onDebug?.({ position, step: "refinement", data: { attempt: attempts, ...ref } });
 
       const refinedEmb = await generateQueryEmbedding(ref.query);
       const refinedResults = await searchProductsSemantic(
-        refinedEmb,
-        MAX_RESULTS,
-        SIM_THRESHOLD,
-        undefined,
-        ref.manufacturer ?? undefined,
-        ref.subcategory ?? undefined,
+        refinedEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD,
+        undefined, ref.manufacturer ?? undefined, ref.subcategory ?? undefined,
       );
+      const fresh: MergedCandidate[] = refinedResults.map((r) => ({ ...r, source: "reformulated" as const }));
+      merged = mergeWithExisting(merged, applyStockPostFilter(fresh, preferences));
 
-      const fresh: MergedCandidate[] = refinedResults.map((r) => ({
-        ...r,
-        source: "reformulated" as const,
-      }));
-      merged = mergeWithExisting(merged, fresh);
-
-      evalResult = await evaluate(item.name, merged, categoryTree, item.instruction, item.unit, item.quantity);
+      matcherResult = await matchCandidates(item.name, merged, item.unit, item.quantity);
       onDebug?.({
-        position,
-        step: "refinement_eval",
-        data: {
-          attempt: attempts,
-          matchType: evalResult.matchType,
-          confidence: evalResult.confidence,
-          selectedSku: evalResult.selectedSku,
-        },
+        position, step: "refinement_match",
+        data: { attempt: attempts, shortlistSize: matcherResult.shortlist.length, bestMatchType: matcherResult.bestMatchType },
       });
     }
 
+    // ── Tier 2: SELECTOR — pick best variant using business rules
+    const selectorResult = await selectProduct(
+      item.name, matcherResult, merged, preferences, groupContext, item.unit, item.quantity,
+    );
+    onDebug?.({
+      position, step: "selector",
+      data: {
+        matchType: selectorResult.matchType,
+        confidence: selectorResult.confidence,
+        selectedSku: selectorResult.selectedSku,
+        reasoning: selectorResult.reasoning,
+        priceNote: selectorResult.priceNote,
+      },
+    });
+
     // Build final result
-    const selected = evalResult.selectedSku
-      ? merged.find((c) => c.sku === evalResult.selectedSku) ?? null
+    const selected = selectorResult.selectedSku
+      ? merged.find((c) => c.sku === selectorResult.selectedSku) ?? null
       : null;
 
-    const candSkus = new Set(evalResult.candidates);
-    const topCands = evalResult.candidates
-      .map((sku) => merged.find((c) => c.sku === sku))
+    const shortlistSkus = new Set(matcherResult.shortlist.map((s) => s.sku));
+    const topCands = matcherResult.shortlist
+      .map((s) => merged.find((c) => c.sku === s.sku))
       .filter((c): c is MergedCandidate => c != null);
-
     for (const c of merged) {
       if (topCands.length >= 5) break;
-      if (!candSkus.has(c.sku)) {
+      if (!shortlistSkus.has(c.sku)) {
         topCands.push(c);
-        candSkus.add(c.sku);
+        shortlistSkus.add(c.sku);
       }
     }
 
     const pipelineMs = Date.now() - t0;
     onDebug?.({
-      position,
-      step: "done",
-      data: {
-        matchType: evalResult.matchType,
-        confidence: evalResult.confidence,
-        pipelineMs,
-        refinementAttempts: attempts,
-      },
+      position, step: "done",
+      data: { matchType: selectorResult.matchType, confidence: selectorResult.confidence, pipelineMs, refinementAttempts: attempts },
     });
 
     return {
@@ -545,11 +900,12 @@ export async function searchPipelineForItem(
       originalName: item.name,
       unit: item.unit,
       quantity: item.quantity,
-      matchType: evalResult.matchType,
-      confidence: evalResult.confidence,
+      matchType: selectorResult.matchType,
+      confidence: selectorResult.confidence,
       product: selected ? slimCandidate(selected) : null,
       candidates: topCands.slice(0, 5).map(slimCandidate),
-      reasoning: evalResult.reasoning,
+      reasoning: selectorResult.reasoning,
+      priceNote: selectorResult.priceNote,
       reformulatedQuery: reformulated,
       pipelineMs,
     };
@@ -567,6 +923,7 @@ export async function searchPipelineForItem(
       product: null,
       candidates: [],
       reasoning: `Pipeline error: ${msg}`,
+      priceNote: null,
       reformulatedQuery: "",
       pipelineMs: Date.now() - t0,
     };

@@ -1,7 +1,7 @@
 import { Agent, tool } from "@openai/agents";
 import { z } from "zod";
-import { fetchProductsBySkus, getCategoryInfo } from "../search.js";
-import { searchPipelineForItem, type PipelineResult } from "../searchPipeline.js";
+import { fetchProductsBySkus, getCategoryTree } from "../search.js";
+import { searchPipelineForItem, type PipelineResult, type SearchPreferences } from "../searchPipeline.js";
 import { generateSessionId, buildBatchSummaryEntry } from "../searchLogger.js";
 
 export const parserAgent = new Agent({
@@ -197,8 +197,7 @@ Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s
  * Uses gpt-5-mini with minimal reasoning effort.
  * All UI actions are implemented as tools the agent calls.
  */
-export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
-  // Cache last search results so add_item / replace_product can include candidates
+export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPreferences?: SearchPreferences): Agent {
   const searchResultCache = new Map<string, PipelineResult>();
 
   // ── Search tool (delegates to AI pipeline) ──
@@ -226,6 +225,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
           (entry) => {
             void Promise.resolve(onEvent({ type: "debug", tool: "search_product", data: entry })).catch(() => {});
           },
+          searchPreferences,
         );
         await onEvent({
           type: "debug",
@@ -253,19 +253,18 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
             ? {
                 sku: result.product.sku,
                 name: result.product.name,
-                manufacturer: result.product.manufacturer,
-                manufacturer_code: result.product.manufacturer_code,
-                category: result.product.category,
-                subcategory: result.product.subcategory,
+                supplier_name: result.product.supplier_name,
+                category_main: result.product.category_main,
+                category_sub: result.product.category_sub,
                 unit: result.product.unit,
-                ean: result.product.ean,
+                current_price: result.product.current_price,
               }
             : null,
           candidates: result.candidates.map((c) => ({
             sku: c.sku,
             name: c.name,
-            manufacturer: c.manufacturer,
-            category: c.category,
+            supplier_name: c.supplier_name,
+            category_main: c.category_main,
           })),
           reasoning: result.reasoning,
           reformulatedQuery: result.reformulatedQuery,
@@ -284,20 +283,18 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
   const streamingCategoryInfoTool = tool({
     name: "get_category_info",
     description:
-      "Get details about product categories. Without arguments: returns top-level categories with counts. " +
-      "With category name: returns subcategories and top manufacturers for that category. " +
-      "Use this to discover the right category/manufacturer filter before searching.",
+      "Get the product category tree. Returns hierarchical categories (code, name, level, parent). " +
+      "Use this to discover category codes for filtering searches.",
     parameters: z.object({
-      category: z.string().nullable().default(null).describe("Category name to drill into, or null for top-level list"),
+      category: z.string().nullable().default(null).describe("Unused, kept for backward compat"),
     }),
-    async execute({ category }) {
-      const cat = category ?? undefined;
-      await onEvent({ type: "tool_activity", tool: "get_category_info", data: { status: "start", category: cat } });
+    async execute() {
+      await onEvent({ type: "tool_activity", tool: "get_category_info", data: { status: "start" } });
       try {
-        const info = await getCategoryInfo(cat);
-        await onEvent({ type: "debug", tool: "get_category_info", data: { type: "result", info } });
+        const tree = await getCategoryTree();
+        await onEvent({ type: "debug", tool: "get_category_info", data: { type: "result", count: tree.length } });
         await onEvent({ type: "tool_activity", tool: "get_category_info", data: { status: "end" } });
-        return JSON.stringify(info);
+        return JSON.stringify(tree);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
         console.error("[get_category_info] Error:", msg);
@@ -477,6 +474,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
                 onEvent({ type: "debug", tool: "process_items", data: entry }),
               ).catch(() => {});
             },
+            searchPreferences,
           );
           matchResults.push(result);
           void Promise.resolve(
@@ -493,6 +491,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback): Agent {
             product: null,
             candidates: [],
             reasoning: "Pipeline unexpectedly failed.",
+            priceNote: null,
             reformulatedQuery: "",
             pipelineMs: 0,
           };

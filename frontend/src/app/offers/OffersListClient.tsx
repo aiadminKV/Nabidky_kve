@@ -234,16 +234,16 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                       </h3>
                       <div className="mt-0.5 flex items-center gap-2 text-xs text-kv-gray-400">
                         <span>{formatDate(offer.updated_at)}</span>
-                        {offer.header?.customerName && (
+                        {!!offer.header?.customerName && (
                           <>
                             <span className="text-kv-gray-200">·</span>
-                            <span className="truncate">{offer.header.customerName}</span>
+                            <span className="truncate">{String(offer.header.customerName)}</span>
                           </>
                         )}
-                        {offer.header?.customerId && (
+                        {!!offer.header?.customerId && (
                           <>
                             <span className="text-kv-gray-200">·</span>
-                            <span className="tabular-nums">ID {offer.header.customerId}</span>
+                            <span className="tabular-nums">ID {String(offer.header.customerId)}</span>
                           </>
                         )}
                       </div>

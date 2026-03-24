@@ -52,7 +52,7 @@ offers.get("/offers", authMiddleware, async (c) => {
  */
 offers.post("/offers", authMiddleware, async (c) => {
   const user = c.get("user");
-  const { title, header } = await c.req.json<{ title: string; header?: Record<string, string> }>();
+  const { title, header } = await c.req.json<{ title: string; header?: Record<string, unknown> }>();
 
   if (!title?.trim()) {
     return c.json({ error: "Title is required" }, 400);
@@ -167,7 +167,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
 offers.put("/offers/:id", authMiddleware, async (c) => {
   const user = c.get("user");
   const offerId = c.req.param("id");
-  const body = await c.req.json<{ title?: string; status?: string; header?: Record<string, string> }>();
+  const body = await c.req.json<{ title?: string; status?: string; header?: Record<string, unknown> }>();
 
   const supabase = getAdminClient();
 
@@ -267,27 +267,34 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
   await supabase.from("offer_items").delete().eq("offer_id", offerId);
 
   if (items.length > 0) {
-    const rows = items.map((item) => ({
-      offer_id: offerId,
-      position: item.position,
-      original_name: item.originalName,
-      unit: item.unit ?? null,
-      quantity: item.quantity ?? null,
-      match_type: item.matchType ?? "not_found",
-      confidence: item.confidence ?? 0,
-      matched_product_id: item.productId ?? null,
-      status: item.confirmed ? "confirmed" : (item.matchType === "not_found" ? "processing" : "matched"),
-      candidates: item.candidates ?? [],
-      confirmed: item.confirmed ?? false,
-      review_status: item.reviewStatus ?? null,
-      extra_columns: item.extraColumns ?? {},
-    }));
+    const rows = items.map((item) => {
+      let productId = item.productId ?? null;
+      if (productId !== null && /^\d+$/.test(String(productId))) {
+        productId = null;
+      }
+      return {
+        offer_id: offerId,
+        position: item.position,
+        original_name: item.originalName,
+        unit: item.unit ?? null,
+        quantity: item.quantity ?? null,
+        match_type: item.matchType ?? "not_found",
+        confidence: item.confidence ?? 0,
+        matched_product_id: productId,
+        status: item.confirmed ? "confirmed" : (item.matchType === "not_found" ? "processing" : "matched"),
+        candidates: item.candidates ?? [],
+        confirmed: item.confirmed ?? false,
+        review_status: item.reviewStatus ?? null,
+        extra_columns: item.extraColumns ?? {},
+      };
+    });
 
     const { error: insertError } = await supabase
       .from("offer_items")
       .insert(rows);
 
     if (insertError) {
+      console.error("[offer_items] Insert error:", insertError.message, insertError.details, insertError.hint);
       return c.json({ error: insertError.message }, 500);
     }
   }
@@ -313,5 +320,106 @@ interface OfferItemInput {
   candidates?: unknown[];
   extraColumns?: Record<string, string>;
 }
+
+/**
+ * GET /branches
+ * List all branches from branches_v2 (used for branch filter dropdown).
+ */
+offers.get("/branches", authMiddleware, async (c) => {
+  const supabase = getAdminClient();
+
+  const { data, error } = await supabase
+    .from("branches_v2")
+    .select("source_branch_code, name")
+    .eq("active", true)
+    .order("source_branch_code", { ascending: true });
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  const branches = (data ?? []).map((b) => ({
+    code: b.source_branch_code,
+    name: b.name,
+  }));
+
+  return c.json({ branches });
+});
+
+/**
+ * GET /manufacturers
+ * Distinct supplier names from products_v2.
+ * Cached in-memory for 1 hour since manufacturer list changes rarely.
+ */
+let mfrCache: { data: string[]; ts: number } | null = null;
+const MFR_CACHE_TTL = 60 * 60 * 1000;
+
+offers.get("/manufacturers", authMiddleware, async (c) => {
+  if (mfrCache && Date.now() - mfrCache.ts < MFR_CACHE_TTL) {
+    return c.json({ manufacturers: mfrCache.data });
+  }
+
+  const supabase = getAdminClient();
+  const { data, error } = await supabase
+    .from("products_v2")
+    .select("supplier_name")
+    .not("supplier_name", "is", null)
+    .neq("supplier_name", "")
+    .order("supplier_name")
+    .limit(5000);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const unique = [...new Set(
+    (data ?? []).map((r: { supplier_name: string }) => r.supplier_name).filter(Boolean),
+  )].sort();
+
+  mfrCache = { data: unique, ts: Date.now() };
+  return c.json({ manufacturers: unique });
+});
+
+/**
+ * POST /product-stock
+ * Get branch-level stock info for a product by SKU.
+ */
+offers.post("/product-stock", authMiddleware, async (c) => {
+  const { sku } = await c.req.json<{ sku: string }>();
+  if (!sku) return c.json({ error: "sku is required" }, 400);
+
+  const supabase = getAdminClient();
+
+  const { data: product } = await supabase
+    .from("products_v2")
+    .select("id, is_stock_item")
+    .eq("sku", sku)
+    .is("removed_at", null)
+    .single();
+
+  if (!product) {
+    return c.json({ stock: [], totalStock: 0, isStockItem: false });
+  }
+
+  const { data: stockRows } = await supabase
+    .from("product_branch_stock_v2")
+    .select("branch_id, stock_qty, branches_v2!inner(source_branch_code, name)")
+    .eq("product_id", product.id);
+
+  const stock = (stockRows ?? []).map((r) => {
+    const branch = r.branches_v2 as unknown as { source_branch_code: string; name: string | null };
+    return {
+      branchCode: branch.source_branch_code,
+      branchName: branch.name,
+      qty: Number(r.stock_qty),
+    };
+  });
+
+  const totalStock = stock.reduce((sum, s) => sum + s.qty, 0);
+
+  return c.json({
+    stock,
+    totalStock,
+    isStockItem: product.is_stock_item ?? false,
+  });
+});
 
 export { offers as offersRouter };

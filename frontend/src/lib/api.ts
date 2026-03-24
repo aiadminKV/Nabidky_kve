@@ -1,4 +1,4 @@
-import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader, FileAttachment, ReviewStatus } from "./types";
+import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader, FileAttachment, ReviewStatus, SearchPreferences } from "./types";
 
 /** Backend URL — direct from browser, no proxy */
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -64,10 +64,15 @@ export function parseChat(message: string, token: string) {
 
 /** Search for already-parsed items (SSE) */
 export function searchItems(
-  items: Array<{ name: string; unit: string | null; quantity: number | null }>,
+  items: Array<{ name: string; unit: string | null; quantity: number | null; instruction?: string | null }>,
   token: string,
+  searchPreferences?: SearchPreferences,
+  groupContexts?: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }>,
 ) {
-  return streamSSE("/agent/search", { items }, token);
+  const body: Record<string, unknown> = { items };
+  if (searchPreferences) body.searchPreferences = searchPreferences;
+  if (groupContexts) body.groupContexts = groupContexts;
+  return streamSSE("/agent/search", body, token);
 }
 
 /** Offer chat agent – intelligent assistant for managing the offer (SSE) */
@@ -76,6 +81,7 @@ export function offerChat(
   offerItems: OfferItemSummary[],
   token: string,
   files?: FileAttachment[],
+  searchPreferences?: SearchPreferences,
 ) {
   const body: Record<string, unknown> = { message, offerItems };
   if (files?.length) {
@@ -86,6 +92,7 @@ export function offerChat(
       base64: f.base64,
     }));
   }
+  if (searchPreferences) body.searchPreferences = searchPreferences;
   return streamSSE("/agent/offer-chat", body, token);
 }
 
@@ -93,8 +100,11 @@ export function offerChat(
 export function searchItemsSemantic(
   items: Array<{ name: string; unit: string | null; quantity: number | null; position: number }>,
   token: string,
+  searchPreferences?: SearchPreferences,
 ) {
-  return streamSSE("/agent/search-semantic", { items }, token);
+  const body: Record<string, unknown> = { items };
+  if (searchPreferences) body.searchPreferences = searchPreferences;
+  return streamSSE("/agent/search-semantic", body, token);
 }
 
 /** Manual single-product search for review modal (REST) */
@@ -277,7 +287,7 @@ export interface OfferSummary {
   id: string;
   title: string;
   status: string;
-  header?: Record<string, string>;
+  header?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -286,7 +296,7 @@ export interface OfferDetail {
   id: string;
   title: string;
   status: string;
-  header?: Record<string, string>;
+  header?: Record<string, unknown>;
   messages: ChatMessageDTO[];
   createdAt: string;
   updatedAt: string;
@@ -338,7 +348,7 @@ export async function listOffers(
 export async function createOffer(
   title: string,
   token: string,
-  header?: Record<string, string>,
+  header?: Record<string, unknown>,
 ): Promise<OfferSummary> {
   const body: Record<string, unknown> = { title };
   if (header) body.header = header;
@@ -372,7 +382,7 @@ export async function getOffer(
 
 export async function updateOffer(
   id: string,
-  data: { title?: string; status?: string; header?: Record<string, string> },
+  data: { title?: string; status?: string; header?: Record<string, unknown> },
   token: string,
 ): Promise<OfferSummary> {
   const res = await fetch(`${BACKEND_URL}/offers/${id}`, {
@@ -497,4 +507,108 @@ export async function changePassword(
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? "Nepodařilo se změnit heslo.");
   }
+}
+
+// ──────────────────────────────────────────────────────────
+// Branches API
+// ──────────────────────────────────────────────────────────
+
+export interface Branch {
+  code: string;
+  name: string | null;
+}
+
+export async function getBranches(token: string): Promise<Branch[]> {
+  const res = await fetch(`${BACKEND_URL}/branches`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.branches ?? [];
+}
+
+// ──────────────────────────────────────────────────────────
+// Product Stock API
+// ──────────────────────────────────────────────────────────
+
+export interface BranchStock {
+  branchCode: string;
+  branchName: string | null;
+  qty: number;
+}
+
+export interface ProductStockInfo {
+  stock: BranchStock[];
+  totalStock: number;
+  isStockItem: boolean;
+}
+
+export async function getProductStock(
+  sku: string,
+  token: string,
+): Promise<ProductStockInfo> {
+  const res = await fetch(`${BACKEND_URL}/product-stock`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ sku }),
+  });
+  if (!res.ok) return { stock: [], totalStock: 0, isStockItem: false };
+  return res.json();
+}
+
+// ── Manufacturers ────────────────────────────────────────
+
+export async function getManufacturers(token: string): Promise<string[]> {
+  const res = await fetch(`${BACKEND_URL}/manufacturers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.manufacturers ?? [];
+}
+
+// ── Search Plan ──────────────────────────────────────────
+
+export interface SearchPlanGroup {
+  groupName: string;
+  category: string | null;
+  suggestedManufacturer: string | null;
+  suggestedLine: string | null;
+  notes: string | null;
+  itemIndices: number[];
+}
+
+export interface SearchPlan {
+  groups: SearchPlanGroup[];
+  enrichedItems: Array<{
+    name: string;
+    unit: string | null;
+    quantity: number | null;
+    instruction: string | null;
+    groupIndex: number;
+  }>;
+}
+
+export async function getSearchPlan(
+  items: Array<{ name: string; unit: string | null; quantity: number | null }>,
+  token: string,
+  searchPreferences?: SearchPreferences,
+): Promise<SearchPlan> {
+  const res = await fetch(`${BACKEND_URL}/agent/search-plan`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ items, searchPreferences }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Search plan failed: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.plan as SearchPlan;
 }

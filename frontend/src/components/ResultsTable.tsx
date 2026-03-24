@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover } from "./ProductInfoPopover";
+import { StockBadge } from "./StockBadge";
 
 const UNIT_GROUPS: Record<string, string> = {
   ks: "ks", kus: "ks", kusu: "ks", kusů: "ks", kusov: "ks", pcs: "ks",
@@ -40,6 +41,7 @@ interface ResultsTableProps {
   onSearchItem?: (item: OfferItem) => void;
   isSearchingSemantic: boolean;
   isProcessing?: boolean;
+  token?: string;
 }
 
 export function ResultsTable({
@@ -56,6 +58,7 @@ export function ResultsTable({
   onSearchItem,
   isSearchingSemantic,
   isProcessing = false,
+  token = "",
 }: ResultsTableProps) {
   const [showResetModal, setShowResetModal] = useState(false);
   const [showReprocessModal, setShowReprocessModal] = useState(false);
@@ -70,6 +73,8 @@ export function ResultsTable({
   const notFoundCount = items.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
   const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed").length;
   const unitMismatchCount = items.filter((i) => i.product && hasUnitMismatch(i.unit, i.product.unit)).length;
+  const priceNoteCount = items.filter((i) => i.priceNote).length;
+  const uncertainCount = items.filter((i) => i.matchType === "uncertain" || i.matchType === "alternative").length;
 
   const extraColumnKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -104,6 +109,22 @@ export function ResultsTable({
                 Vše zkontrolováno
               </span>
             ) : null}
+            {uncertainCount > 0 && !isSearching && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50/80 px-2.5 py-1 text-[11px] font-medium text-blue-700">
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+                </svg>
+                {uncertainCount} nejisté
+              </span>
+            )}
+            {priceNoteCount > 0 && !isSearching && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+                {priceNoteCount} cenové upozornění
+              </span>
+            )}
             {unitMismatchCount > 0 && !isSearching && (
               <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-700">
                 <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -180,6 +201,54 @@ export function ResultsTable({
             className="h-full bg-kv-red transition-all duration-300 ease-out"
             style={{ width: `${(doneCount / items.length) * 100}%` }}
           />
+        </div>
+      )}
+
+      {/* Offer summary bar */}
+      {!isSearching && items.length > 0 && (
+        <div className="shrink-0 border-b border-kv-gray-100 bg-white px-6 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold">{matchedCount}</span>
+              <span className="text-kv-gray-500">nalezeno</span>
+            </div>
+            {notFoundCount > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-100 text-red-700 text-[10px] font-bold">{notFoundCount}</span>
+                <span className="text-kv-gray-500">nenalezeno</span>
+              </div>
+            )}
+            {uncertainCount > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">{uncertainCount}</span>
+                <span className="text-kv-gray-500">nejisté</span>
+              </div>
+            )}
+            {priceNoteCount > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold">{priceNoteCount}</span>
+                <span className="text-kv-gray-500">cenové upozornění</span>
+              </div>
+            )}
+            {(() => {
+              const prices = items
+                .filter((i) => i.product?.current_price != null)
+                .map((i) => (i.product!.current_price! * (i.quantity ?? 1)));
+              if (prices.length === 0) return null;
+              const total = prices.reduce((a, b) => a + b, 0);
+              return (
+                <div className="ml-auto flex items-center gap-1.5 font-medium text-kv-dark">
+                  <svg className="h-3.5 w-3.5 text-kv-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                  </svg>
+                  <span className="tabular-nums">
+                    {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(total)}
+                  </span>
+                  <span className="font-normal text-kv-gray-400">odhad bez DPH</span>
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -282,6 +351,20 @@ export function ResultsTable({
                           {item.product.sku && (
                             <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
                           )}
+                          <StockBadge product={item.product} token={token} />
+                        </div>
+                      )}
+                      {item.reasoning && !isCurrentlySearching && (
+                        <p className="mt-0.5 text-[11px] text-kv-gray-400 truncate max-w-[290px]" title={item.reasoning}>
+                          {item.reasoning}
+                        </p>
+                      )}
+                      {item.priceNote && !isCurrentlySearching && (
+                        <div className="mt-1 flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
+                          <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                          </svg>
+                          <span className="truncate">{item.priceNote}</span>
                         </div>
                       )}
                     </div>

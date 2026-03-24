@@ -5,7 +5,7 @@ export type MatchType = "match" | "uncertain" | "multiple" | "alternative" | "no
 export type ReviewStatus = "ai_suggestion" | "reviewed";
 
 /** Phases of the offer processing flow */
-export type OfferPhase = "idle" | "parsing" | "parsed" | "processing" | "review";
+export type OfferPhase = "idle" | "parsing" | "parsed" | "planning" | "processing" | "review";
 
 /** A product from the catalog */
 export interface Product {
@@ -22,6 +22,13 @@ export interface Product {
   subcategory?: string | null;
   sub_subcategory?: string | null;
   eshop_url?: string | null;
+  is_stock_item?: boolean;
+  has_stock?: boolean;
+  current_price?: number | null;
+  supplier_name?: string | null;
+  category_main?: string | null;
+  category_sub?: string | null;
+  category_line?: string | null;
 }
 
 /** A parsed item before search (editable by user) */
@@ -32,6 +39,24 @@ export interface ParsedItem {
   quantity: number | null;
   extraColumns?: Record<string, string>;
 }
+
+/** Offer type determines the overall search strategy */
+export type OfferType = "vyberko" | "realizace";
+
+/** Pre-search configuration that flows into the pipeline */
+export interface SearchPreferences {
+  offerType: OfferType;
+  stockFilter: "any" | "in_stock" | "stock_items_only";
+  branchFilter: string | null;
+  priceStrategy: "lowest" | "standard";
+}
+
+export const DEFAULT_SEARCH_PREFERENCES: SearchPreferences = {
+  offerType: "realizace",
+  stockFilter: "any",
+  branchFilter: null,
+  priceStrategy: "standard",
+};
 
 /** Customer/offer header data for export */
 export interface OfferHeader {
@@ -45,6 +70,13 @@ export interface OfferHeader {
   specialAction: string;
   branch: string;
   deliveryAddress: string;
+  searchPreferences?: SearchPreferences;
+}
+
+/** Preferred manufacturer/line from the planner, passed to the selector */
+export interface GroupContext {
+  preferredManufacturer: string | null;
+  preferredLine: string | null;
 }
 
 /** A matched offer item after search */
@@ -58,6 +90,7 @@ export interface OfferItem {
   product: Product | null;
   candidates: Product[];
   reasoning?: string;
+  priceNote?: string | null;
   reformulatedQuery?: string;
   pipelineMs?: number;
   confirmed?: boolean;

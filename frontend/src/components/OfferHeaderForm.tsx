@@ -69,6 +69,7 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
   const update = (key: keyof OfferHeader, value: string) => {
     onChange({ ...header, [key]: value });
   };
+
   const showExpanded = forceExpanded || expanded;
 
   return (
@@ -157,7 +158,7 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
                   <TextField
                     key={f.key}
                     label={f.label}
-                    value={header[f.key]}
+                    value={(header[f.key] as string) ?? ""}
                     placeholder={f.placeholder}
                     onChange={(value) => update(f.key, value)}
                   />
@@ -222,7 +223,7 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
                       <TextField
                         key={f.key}
                         label={f.label}
-                        value={header[f.key]}
+                        value={(header[f.key] as string) ?? ""}
                         placeholder={f.placeholder}
                         onChange={(value) => update(f.key, value)}
                       />

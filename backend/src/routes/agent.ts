@@ -3,8 +3,8 @@ import { streamText } from "hono/streaming";
 import { run, user } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
-import { searchProductsFulltext } from "../services/search.js";
-import { searchPipelineForItem, type PipelineResult, type PipelineDebugFn } from "../services/searchPipeline.js";
+import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
+import { searchPipelineForItem, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
@@ -16,6 +16,7 @@ interface ParsedItem {
   name: string;
   unit: string | null;
   quantity: number | null;
+  instruction?: string | null;
 }
 
 function sseEvent(type: string, data: unknown): string {
@@ -62,7 +63,11 @@ agent.post("/agent/chat", authMiddleware, async (c) => {
  * Streams results via SSE as they're found.
  */
 agent.post("/agent/search", authMiddleware, async (c) => {
-  const { items } = await c.req.json<{ items: ParsedItem[] }>();
+  const { items, searchPreferences, groupContexts } = await c.req.json<{
+    items: ParsedItem[];
+    searchPreferences?: SearchPreferences;
+    groupContexts?: Record<number, GroupContext>;
+  }>();
 
   if (!items?.length) {
     return c.json({ error: "Items array is required" }, 400);
@@ -118,8 +123,9 @@ agent.post("/agent/search", authMiddleware, async (c) => {
         if (idx >= items.length) return;
 
         const item = items[idx];
+        const gc = groupContexts?.[idx];
         try {
-          const result = await searchPipelineForItem(item, idx, onDebug);
+          const result = await searchPipelineForItem(item, idx, onDebug, searchPreferences, gc);
           matchResults.push(result);
           await stream.write(sseEvent("item_matched", result));
         } catch {
@@ -133,6 +139,7 @@ agent.post("/agent/search", authMiddleware, async (c) => {
             product: null,
             candidates: [],
             reasoning: "Pipeline unexpectedly failed.",
+            priceNote: null,
             reformulatedQuery: "",
             pipelineMs: 0,
           };
@@ -179,23 +186,28 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
   }
 
   try {
-    const results = await searchProductsFulltext(query, maxResults);
-    const slim = results.map((r) => ({
-      id: r.id,
-      sku: r.sku,
-      name: r.name,
-      manufacturer_code: r.manufacturer_code,
-      manufacturer: r.manufacturer,
-      category: r.category,
-      unit: r.unit,
-      ean: r.ean,
-      name_secondary: r.name_secondary,
-      price: r.price,
-      subcategory: r.subcategory,
-      sub_subcategory: r.sub_subcategory,
-      eshop_url: r.eshop_url,
-    }));
-    return c.json({ results: slim });
+    const [fulltextResults, exactResults] = await Promise.all([
+      searchProductsFulltext(query, maxResults).catch(() => []),
+      lookupProductsExact(query, maxResults).catch(() => []),
+    ]);
+
+    const seen = new Set<string>();
+    const combined: Array<Record<string, unknown>> = [];
+
+    for (const r of exactResults) {
+      if (!seen.has(r.sku)) {
+        seen.add(r.sku);
+        combined.push({ ...r, _source: "exact" });
+      }
+    }
+    for (const r of fulltextResults) {
+      if (!seen.has(r.sku)) {
+        seen.add(r.sku);
+        combined.push({ ...r, _source: "fulltext" });
+      }
+    }
+
+    return c.json({ results: combined.slice(0, maxResults) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Search failed";
     return c.json({ error: msg }, 500);
@@ -213,7 +225,7 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
  * The pipeline already includes semantic search, so this is equivalent to /agent/search.
  */
 agent.post("/agent/search-semantic", authMiddleware, async (c) => {
-  const { items } = await c.req.json<{ items: Array<ParsedItem & { position: number }> }>();
+  const { items, searchPreferences } = await c.req.json<{ items: Array<ParsedItem & { position: number }>; searchPreferences?: SearchPreferences }>();
 
   if (!items?.length) {
     return c.json({ error: "Items array is required" }, 400);
@@ -257,7 +269,7 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
 
         const item = items[idx];
         try {
-          const result = await searchPipelineForItem(item, item.position, onDebug);
+          const result = await searchPipelineForItem(item, item.position, onDebug, searchPreferences);
           matchResults.push(result);
           await stream.write(sseEvent("item_matched", result));
         } catch {
@@ -271,6 +283,7 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
             product: null,
             candidates: [],
             reasoning: "Pipeline failed.",
+            priceNote: null,
             reformulatedQuery: "",
             pipelineMs: 0,
           };
@@ -300,6 +313,30 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
 
     await stream.write("data: [DONE]\n\n");
   });
+});
+
+/**
+ * POST /agent/search-plan
+ * Analyzes parsed items and creates a search plan with grouping and enrichment.
+ */
+agent.post("/agent/search-plan", authMiddleware, async (c) => {
+  const { items, searchPreferences } = await c.req.json<{
+    items: ParsedItem[];
+    searchPreferences?: SearchPreferences;
+  }>();
+
+  if (!items?.length) {
+    return c.json({ error: "Items array is required" }, 400);
+  }
+
+  try {
+    const plan: SearchPlan = await createSearchPlan(items, searchPreferences);
+    return c.json({ plan });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Planning failed";
+    console.error("[search-plan] Error:", msg);
+    return c.json({ error: msg }, 500);
+  }
 });
 
 interface OfferItemSummary {
@@ -344,10 +381,11 @@ const ACTION_TOOL_NAMES = new Set([
  * Uses gpt-5-mini with tool-call architecture.
  */
 agent.post("/agent/offer-chat", authMiddleware, async (c) => {
-  const { message, offerItems, files } = await c.req.json<{
+  const { message, offerItems, files, searchPreferences } = await c.req.json<{
     message: string;
     offerItems?: OfferItemSummary[];
     files?: FileAttachmentInput[];
+    searchPreferences?: SearchPreferences;
   }>();
 
   if (!message?.trim() && !files?.length) {
@@ -393,7 +431,7 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
         } else {
           await safeWrite(sseEvent("debug", { ts: Date.now(), ...entry }));
         }
-      });
+      }, searchPreferences);
 
       // Pre-process Excel/CSV files into text, keep images/PDFs as multimodal parts
       type ContentPart =

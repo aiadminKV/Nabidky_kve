@@ -11,13 +11,15 @@ import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { OfferHeaderSummary } from "@/components/OfferHeaderSummary";
+import { SearchPreferencesBar } from "@/components/SearchPreferencesBar";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
   offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx,
-  getOffer, saveOfferMessages, saveOfferItems, updateOffer,
-  type ChatMessageDTO, type SaveOfferItemInput,
+  getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan,
+  type ChatMessageDTO, type SaveOfferItemInput, type SearchPlan,
 } from "@/lib/api";
+import { SearchPlanPanel } from "@/components/SearchPlanPanel";
 import type {
   ChatMessage,
   DebugEntry,
@@ -30,8 +32,10 @@ import type {
   ParsedItem,
   Product,
   ReviewStatus,
+  SearchPreferences,
   ToolCallStatus,
 } from "@/lib/types";
+import { DEFAULT_SEARCH_PREFERENCES } from "@/lib/types";
 
 interface OfferDetailClientProps {
   offerId: string;
@@ -50,6 +54,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [reviewItem, setReviewItem] = useState<OfferItem | null>(null);
   const [isParsingChat, setIsParsingChat] = useState(false);
   const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
+  const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
+  const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
@@ -69,6 +75,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   });
   const [loadingOffer, setLoadingOffer] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [cachedToken, setCachedToken] = useState("");
   const batchPositionOffset = useRef(0);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -115,6 +122,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     async function load() {
       try {
         const token = await getToken();
+        setCachedToken(token);
         const { offer, items } = await getOffer(offerId, token);
 
         if (cancelled) return;
@@ -238,7 +246,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const persistHeader = useCallback(async (header: OfferHeader) => {
     try {
       const token = await getToken();
-      await updateOffer(offerId, { header: header as unknown as Record<string, string> }, token);
+      const headerRecord: Record<string, unknown> = { ...header };
+      await updateOffer(offerId, { header: headerRecord }, token);
     } catch {
       // silent
     }
@@ -439,7 +448,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       try {
         const token = await getToken();
         const summary = buildOfferSummary();
-        const stream = offerChat(text, summary, token, files);
+        const stream = offerChat(text, summary, token, files, offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES);
 
         for await (const event of stream) {
           if (event.type === "text_delta") {
@@ -615,12 +624,42 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   // Handler: user clicks "Zpracovat" -> search phase
   // ──────────────────────────────────────────────────────────
 
-  const handleProcess = useCallback(async () => {
-    const validItems = parsedItems.filter((i) => i.name.trim());
+  const handleRunSearch = useCallback(async (
+    itemsToSearch?: ParsedItem[],
+    plan?: SearchPlan,
+  ) => {
+    const validItems = itemsToSearch ?? parsedItems.filter((i) => i.name.trim());
     if (validItems.length === 0) return;
 
+    const searchItems_ = plan
+      ? plan.enrichedItems.map((ei) => ({
+          name: ei.name,
+          unit: ei.unit,
+          quantity: ei.quantity,
+          instruction: ei.instruction,
+        }))
+      : validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity }));
+
+    // Extract per-item groupContexts from the plan (manufacturer/line preferences)
+    let groupContexts: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }> | undefined;
+    if (plan) {
+      groupContexts = {};
+      for (let i = 0; i < plan.enrichedItems.length; i++) {
+        const ei = plan.enrichedItems[i];
+        const group = plan.groups[ei.groupIndex];
+        if (group?.suggestedManufacturer || group?.suggestedLine) {
+          groupContexts[i] = {
+            preferredManufacturer: group.suggestedManufacturer ?? null,
+            preferredLine: group.suggestedLine ?? null,
+          };
+        }
+      }
+      if (Object.keys(groupContexts).length === 0) groupContexts = undefined;
+    }
+
     setPhase("processing");
-    addMessage("system", `Vyhledávám ${validItems.length} položek v katalogu…`);
+    setSearchPlan(null);
+    addMessage("system", `Vyhledávám ${searchItems_.length} položek v katalogu…`);
 
     const emptyOfferItems: OfferItem[] = validItems.map((item, i) => ({
       position: i,
@@ -641,8 +680,10 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     try {
       const token = await getToken();
       const stream = searchItems(
-        validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        searchItems_,
         token,
+        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
+        groupContexts,
       );
 
       for await (const event of stream) {
@@ -681,7 +722,33 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       setSearchingSet(new Set());
       if (phase === "processing") setPhase("review");
     }
-  }, [parsedItems, addMessage, getToken, phase, flashPosition, debouncedSaveItems]);
+  }, [parsedItems, addMessage, getToken, phase, flashPosition, debouncedSaveItems, offerHeader.searchPreferences]);
+
+  const handleProcess = useCallback(async () => {
+    const validItems = parsedItems.filter((i) => i.name.trim());
+    if (validItems.length === 0) return;
+
+    setIsPlanLoading(true);
+    setPhase("planning");
+    addMessage("system", `Analyzuji ${validItems.length} položek a připravuji plán vyhledávání…`);
+
+    try {
+      const token = await getToken();
+      const plan = await getSearchPlan(
+        validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        token,
+        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
+      );
+      setSearchPlan(plan);
+      addMessage("system", `Plán připraven: ${plan.groups.length} ${plan.groups.length === 1 ? "skupina" : "skupin"}. Zkontrolujte a spusťte vyhledávání.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Plánování selhalo";
+      addMessage("system", `Chyba plánování: ${msg}. Spouštím vyhledávání bez plánu.`);
+      handleRunSearch(validItems);
+    } finally {
+      setIsPlanLoading(false);
+    }
+  }, [parsedItems, addMessage, getToken, offerHeader.searchPreferences, handleRunSearch]);
 
   // ──────────────────────────────────────────────────────────
   // Handler: user clicks "Zpracovat nenalezené" -> semantic search
@@ -707,6 +774,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           position: i.position,
         })),
         token,
+        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
       );
 
       for await (const event of stream) {
@@ -863,6 +931,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       const stream = searchItems(
         validItems.map((i) => ({ name: i.originalName, unit: i.unit, quantity: i.quantity })),
         token,
+        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
       );
 
       for await (const event of stream) {
@@ -924,6 +993,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       const stream = searchItemsSemantic(
         [{ name: item.originalName, unit: item.unit, quantity: item.quantity, position: item.position }],
         token,
+        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
       );
 
       for await (const event of stream) {
@@ -1111,9 +1181,38 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             items={parsedItems}
             onItemsChange={setParsedItems}
             onProcess={handleProcess}
-            isProcessing={false}
+            isProcessing={isPlanLoading}
           />
         );
+
+      case "planning":
+        if (isPlanLoading) {
+          return (
+            <div className="flex h-full items-center justify-center p-6">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-kv-gray-300 border-t-kv-red" />
+                <p className="text-sm text-kv-gray-500">Připravuji plán vyhledávání…</p>
+              </div>
+            </div>
+          );
+        }
+        if (searchPlan) {
+          return (
+            <SearchPlanPanel
+              plan={searchPlan}
+              onApprove={(plan) => {
+                const validItems = parsedItems.filter((i) => i.name.trim());
+                handleRunSearch(validItems, plan);
+              }}
+              onSkip={() => {
+                const validItems = parsedItems.filter((i) => i.name.trim());
+                handleRunSearch(validItems);
+              }}
+              token={cachedToken}
+            />
+          );
+        }
+        return null;
 
       case "processing":
       case "review":
@@ -1132,6 +1231,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             onSearchItem={handleSearchSingleItem}
             isSearchingSemantic={isSearchingSemantic}
             isProcessing={searchingSet.size > 0}
+            token={cachedToken}
           />
         );
     }
@@ -1172,7 +1272,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           </div>
 
           {/* Right panel – Context-dependent */}
-          <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+          <div className="flex flex-1 min-h-0 min-w-0 flex-col gap-3">
+            <SearchPreferencesBar
+              prefs={offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES}
+              onChange={(newPrefs) => handleHeaderChange({ ...offerHeader, searchPreferences: newPrefs })}
+              token={cachedToken}
+            />
             <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-kv-gray-200 bg-white shadow-sm">
               <div className="flex-1 min-h-0 min-w-0">
                 {renderRightPanel()}
@@ -1190,6 +1295,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           onSkip={handleSkip}
           onClose={() => setReviewItem(null)}
           onManualSearch={handleManualSearch}
+          token={cachedToken}
         />
       )}
 

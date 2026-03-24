@@ -1,39 +1,63 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAdminClient } from "./supabase.js";
 
+// ── V2 Result Types ─────────────────────────────────────────
+
 export interface ProductResult {
-  id: string;
+  id: number;
   sku: string;
   name: string;
-  name_secondary: string | null;
   unit: string | null;
-  price: number | null;
-  ean: string | null;
-  manufacturer_code: string | null;
-  manufacturer: string | null;
-  category: string | null;
-  subcategory: string | null;
-  sub_subcategory: string | null;
-  eshop_url: string | null;
+  current_price: number | null;
+  supplier_name: string | null;
+  category_main: string | null;
+  category_sub: string | null;
+  category_line: string | null;
+  is_stock_item: boolean;
+  has_stock: boolean;
+  removed_at: string | null;
+}
+
+export interface FulltextResult extends ProductResult {
   rank: number;
   similarity_score: number;
 }
 
-export interface SemanticResult extends Omit<ProductResult, "rank" | "similarity_score"> {
+export interface SemanticResult extends ProductResult {
   cosine_similarity: number;
 }
 
-/**
- * Fulltext + trigram hybrid search.
- * Uses the DB-level RPC function for optimal performance.
- */
+export interface ExactResult extends ProductResult {
+  match_type: string;
+  matched_value: string;
+}
+
+export interface CategoryTreeEntry {
+  category_code: string;
+  category_name: string;
+  level: number;
+  parent_code: string | null;
+  product_count: number | null;
+}
+
+// ── Stock / Branch filter options ────────────────────────────
+
+export interface StockFilterOptions {
+  stockItemOnly?: boolean;
+  inStockOnly?: boolean;
+  branchCodeFilter?: string | null;
+}
+
+// ── Fulltext Search ─────────────────────────────────────────
+
 export async function searchProductsFulltext(
   query: string,
   maxResults = 20,
   client?: SupabaseClient,
   manufacturer?: string,
   category?: string,
-): Promise<ProductResult[]> {
+  stockOpts?: StockFilterOptions,
+): Promise<FulltextResult[]> {
   const supabase = client ?? getAdminClient();
 
   const rpcParams: Record<string, unknown> = {
@@ -42,51 +66,21 @@ export async function searchProductsFulltext(
   };
   if (manufacturer) rpcParams.manufacturer_filter = manufacturer;
   if (category) rpcParams.category_filter = category;
+  if (stockOpts?.stockItemOnly) rpcParams.stock_item_only = true;
+  if (stockOpts?.inStockOnly) rpcParams.in_stock_only = true;
+  if (stockOpts?.branchCodeFilter) rpcParams.branch_code_filter = stockOpts.branchCodeFilter;
 
-  const { data, error } = await supabase.rpc("search_products_fulltext", rpcParams);
+  const { data, error } = await supabase.rpc("search_products_v2_fulltext", rpcParams);
 
   if (error) {
     throw new Error(`Fulltext search failed: ${error.message}`);
   }
 
-  return (data ?? []) as ProductResult[];
+  return (data ?? []) as FulltextResult[];
 }
 
-export interface CategoryInfo {
-  category: string;
-  subcategories: { name: string; cnt: number }[];
-  manufacturers: { name: string; cnt: number }[];
-}
+// ── Semantic Search ─────────────────────────────────────────
 
-export interface TopCategory {
-  name: string;
-  cnt: number;
-}
-
-/**
- * Get category info: top-level categories (no arg) or subcategories + manufacturers for a specific category.
- */
-export async function getCategoryInfo(
-  category?: string,
-  client?: SupabaseClient,
-): Promise<CategoryInfo | TopCategory[]> {
-  const supabase = client ?? getAdminClient();
-
-  const rpcParams: Record<string, unknown> = {};
-  if (category) rpcParams.target_category = category;
-
-  const { data, error } = await supabase.rpc("get_category_info", rpcParams);
-
-  if (error) {
-    throw new Error(`Category info failed: ${error.message}`);
-  }
-
-  return data as CategoryInfo | TopCategory[];
-}
-
-/**
- * Semantic vector search via product_embeddings table + HNSW index.
- */
 export async function searchProductsSemantic(
   embedding: number[],
   maxResults = 10,
@@ -94,6 +88,7 @@ export async function searchProductsSemantic(
   client?: SupabaseClient,
   manufacturer?: string,
   category?: string,
+  stockOpts?: StockFilterOptions,
 ): Promise<SemanticResult[]> {
   const supabase = client ?? getAdminClient();
 
@@ -104,8 +99,11 @@ export async function searchProductsSemantic(
   };
   if (manufacturer) rpcParams.manufacturer_filter = manufacturer;
   if (category) rpcParams.category_filter = category;
+  if (stockOpts?.stockItemOnly) rpcParams.stock_item_only = true;
+  if (stockOpts?.inStockOnly) rpcParams.in_stock_only = true;
+  if (stockOpts?.branchCodeFilter) rpcParams.branch_code_filter = stockOpts.branchCodeFilter;
 
-  const { data, error } = await supabase.rpc("search_product_embeddings_semantic", rpcParams);
+  const { data, error } = await supabase.rpc("search_products_v2_semantic", rpcParams);
 
   if (error) {
     throw new Error(`Semantic search failed: ${error.message}`);
@@ -114,22 +112,35 @@ export async function searchProductsSemantic(
   return (data ?? []) as SemanticResult[];
 }
 
-export interface CategoryTreeEntry {
-  category: string;
-  subcategory: string;
-  sub_subcategory: string | null;
-  product_count: number;
+// ── Exact Lookup (SKU / EAN / IDNLF) ───────────────────────
+
+export async function lookupProductsExact(
+  query: string,
+  maxResults = 10,
+  client?: SupabaseClient,
+): Promise<ExactResult[]> {
+  const supabase = client ?? getAdminClient();
+
+  const { data, error } = await supabase.rpc("lookup_products_v2_exact", {
+    lookup_query: query,
+    max_results: maxResults,
+  });
+
+  if (error) {
+    throw new Error(`Exact lookup failed: ${error.message}`);
+  }
+
+  return (data ?? []) as ExactResult[];
 }
 
-/**
- * Load the full category tree from the DB (subcategory/sub_subcategory with counts).
- */
+// ── Category Tree ───────────────────────────────────────────
+
 export async function getCategoryTree(
   client?: SupabaseClient,
 ): Promise<CategoryTreeEntry[]> {
   const supabase = client ?? getAdminClient();
 
-  const { data, error } = await supabase.rpc("get_category_tree");
+  const { data, error } = await supabase.rpc("get_category_tree_v2");
 
   if (error) {
     throw new Error(`Category tree failed: ${error.message}`);
@@ -138,37 +149,59 @@ export async function getCategoryTree(
   return (data ?? []) as CategoryTreeEntry[];
 }
 
-/**
- * Fetch multiple products by their SKU codes.
- */
+// ── Fetch by SKU ────────────────────────────────────────────
+
 export async function fetchProductsBySkus(
   skus: string[],
   client?: SupabaseClient,
 ): Promise<ProductResult[]> {
   if (skus.length === 0) return [];
   const supabase = client ?? getAdminClient();
-  const { data } = await supabase
-    .from("products")
-    .select("id, sku, name, name_secondary, unit, price, ean, manufacturer_code, manufacturer, category, subcategory, sub_subcategory, eshop_url")
+
+  const { data, error } = await supabase
+    .from("products_v2")
+    .select(`
+      id, sku, name, unit, supplier_name,
+      category_main, category_sub, category_line,
+      is_stock_item, removed_at
+    `)
     .in("sku", skus);
-  return (data ?? []) as ProductResult[];
+
+  if (error) {
+    throw new Error(`Fetch by SKU failed: ${error.message}`);
+  }
+
+  return (data ?? []).map((p: any) => ({
+    ...p,
+    current_price: null,
+    has_stock: false,
+  })) as ProductResult[];
 }
 
-/**
- * Get a product by its SKU code.
- */
 export async function getProductBySku(
   sku: string,
   client?: SupabaseClient,
 ): Promise<ProductResult | null> {
+  const results = await fetchProductsBySkus([sku], client);
+  return results[0] ?? null;
+}
+
+// ── Fetch by IDs ────────────────────────────────────────────
+
+export async function fetchProductsByIds(
+  ids: number[],
+  client?: SupabaseClient,
+): Promise<ProductResult[]> {
+  if (ids.length === 0) return [];
   const supabase = client ?? getAdminClient();
 
-  const { data, error } = await supabase
-    .from("products")
-    .select("*")
-    .eq("sku", sku)
-    .single();
+  const { data, error } = await supabase.rpc("get_products_v2_by_ids", {
+    product_ids: ids,
+  });
 
-  if (error) return null;
-  return data as ProductResult;
+  if (error) {
+    throw new Error(`Fetch by IDs failed: ${error.message}`);
+  }
+
+  return (data ?? []) as ProductResult[];
 }
