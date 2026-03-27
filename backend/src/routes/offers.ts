@@ -120,6 +120,8 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
       confirmed,
       review_status,
       extra_columns,
+      parent_item_id,
+      component_role,
       products:matched_product_id (
         id, sku, name, name_secondary, unit, price, ean,
         manufacturer_code, manufacturer, category, subcategory,
@@ -146,6 +148,8 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
     confirmed: item.confirmed ?? false,
     reviewStatus: item.review_status ?? null,
     extraColumns: item.extra_columns ?? {},
+    parentItemId: item.parent_item_id ?? null,
+    componentRole: item.component_role ?? null,
   }));
 
   return c.json({
@@ -289,6 +293,8 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
         confirmed: item.confirmed ?? false,
         review_status: item.reviewStatus ?? null,
         extra_columns: item.extraColumns ?? {},
+        parent_item_id: item.parentItemId ?? null,
+        component_role: item.componentRole ?? null,
       };
     });
 
@@ -323,6 +329,8 @@ interface OfferItemInput {
   reviewStatus?: string | null;
   candidates?: unknown[];
   extraColumns?: Record<string, string>;
+  parentItemId?: string | null;
+  componentRole?: string | null;
 }
 
 /**

@@ -64,7 +64,7 @@ export function parseChat(message: string, token: string) {
 
 /** Search for already-parsed items (SSE) */
 export function searchItems(
-  items: Array<{ name: string; unit: string | null; quantity: number | null; instruction?: string | null }>,
+  items: Array<{ name: string; unit: string | null; quantity: number | null; instruction?: string | null; isSet?: boolean; setHint?: string | null; parentItemId?: string | null }>,
   token: string,
   searchPreferences?: SearchPreferences,
   groupContexts?: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }>,
@@ -320,6 +320,8 @@ export interface OfferItemDTO {
   product: Product | null;
   candidates: Product[];
   confirmed: boolean;
+  parentItemId?: string | null;
+  componentRole?: string | null;
   reviewStatus: ReviewStatus | null;
   extraColumns: Record<string, string>;
 }
@@ -438,6 +440,8 @@ export interface SaveOfferItemInput {
   reviewStatus?: ReviewStatus | null;
   candidates?: unknown[];
   extraColumns?: Record<string, string>;
+  parentItemId?: string | null;
+  componentRole?: string | null;
 }
 
 export async function saveOfferItems(
@@ -591,6 +595,8 @@ export interface SearchPlan {
     quantity: number | null;
     instruction: string | null;
     groupIndex: number;
+    isSet?: boolean;
+    setHint?: string | null;
   }>;
 }
 

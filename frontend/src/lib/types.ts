@@ -109,6 +109,10 @@ export interface OfferItem {
   extraColumns?: Record<string, string>;
   exactLookupAttempted?: boolean;
   exactLookupFound?: boolean;
+  /** If this item is a component of a set, this points to the parent item's itemId */
+  parentItemId?: string | null;
+  /** Component role within a set (mechanism, cover, frame, etc.) */
+  componentRole?: string | null;
 }
 
 /** SSE event from backend */

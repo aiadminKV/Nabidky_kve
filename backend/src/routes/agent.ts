@@ -4,7 +4,7 @@ import { run, user } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
 import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
-import { searchPipelineForItem, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
+import { searchPipelineForItem, searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
@@ -17,6 +17,10 @@ interface ParsedItem {
   unit: string | null;
   quantity: number | null;
   instruction?: string | null;
+  isSet?: boolean;
+  setHint?: string | null;
+  parentItemId?: string | null;
+  componentRole?: string | null;
 }
 
 function sseEvent(type: string, data: unknown): string {
@@ -122,12 +126,27 @@ agent.post("/agent/search", authMiddleware, async (c) => {
         const idx = cursor++;
         if (idx >= items.length) return;
 
-        const item = items[idx];
+        const item = items[idx]!;
         const gc = groupContexts?.[idx];
         try {
-          const result = await searchPipelineForItem(item, idx, onDebug, searchPreferences, gc);
-          matchResults.push(result);
-          await stream.write(sseEvent("item_matched", result));
+          if (item.isSet && item.setHint) {
+            const setResult = await searchPipelineForSet(
+              { ...item, isSet: true, setHint: item.setHint },
+              idx,
+              item.parentItemId ?? `set-${idx}`,
+              onDebug,
+              searchPreferences,
+              gc,
+            );
+            for (const comp of setResult.components) {
+              matchResults.push(comp.result);
+            }
+            await stream.write(sseEvent("set_matched", setResult));
+          } else {
+            const result = await searchPipelineForItem(item, idx, onDebug, searchPreferences, gc);
+            matchResults.push(result);
+            await stream.write(sseEvent("item_matched", result));
+          }
         } catch {
           const failResult: PipelineResult = {
             position: idx,

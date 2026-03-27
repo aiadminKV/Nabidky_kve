@@ -165,6 +165,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             extraColumns: item.extraColumns && Object.keys(item.extraColumns).length > 0
               ? item.extraColumns
               : undefined,
+            parentItemId: item.parentItemId ?? null,
+            componentRole: item.componentRole ?? null,
           }));
           setOfferItems(restored);
           setPhase("review");
@@ -228,6 +230,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         reviewStatus: i.reviewStatus ?? null,
         candidates: i.candidates ?? [],
         extraColumns: i.extraColumns,
+        parentItemId: i.parentItemId ?? null,
+        componentRole: i.componentRole ?? null,
       }));
       await saveOfferItems(offerId, dtos, token);
     } catch {
@@ -664,6 +668,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           unit: ei.unit,
           quantity: ei.quantity,
           instruction: ei.instruction,
+          isSet: ei.isSet ?? false,
+          setHint: ei.setHint ?? null,
         }))
       : validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity }));
 
@@ -706,10 +712,16 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     const batchIdMap = emptyOfferItems.map((i) => i.itemId);
     setSearchingSet(new Set(batchIdMap));
 
+    // Pass parentItemId for set items so backend can reference them
+    const enrichedSearchItems = searchItems_.map((si, i) => ({
+      ...si,
+      parentItemId: ('isSet' in si && si.isSet) ? batchIdMap[i] : null,
+    }));
+
     try {
       const token = await getToken();
       const stream = searchItems(
-        searchItems_,
+        enrichedSearchItems,
         token,
         offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
         groupContexts,
@@ -720,6 +732,66 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           const pos = event.data.position as number;
           const id = batchIdMap[pos];
           if (id) setSearchingSet((prev) => new Set(prev).add(id));
+        } else if (event.type === "set_matched") {
+          const setData = event.data as unknown as {
+            parentPosition: number;
+            parentItemId: string;
+            originalName: string;
+            unit: string | null;
+            quantity: number | null;
+            components: Array<{
+              name: string;
+              role: string;
+              quantity: number;
+              result: OfferItem;
+            }>;
+          };
+          const parentId = batchIdMap[setData.parentPosition];
+          if (parentId) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(parentId);
+              return next;
+            });
+            flashPosition(setData.parentPosition);
+            setOfferItems((prev) => {
+              const parentIdx = prev.findIndex((item) => item.itemId === parentId);
+              if (parentIdx === -1) return prev;
+
+              const parentItem: OfferItem = {
+                ...prev[parentIdx]!,
+                matchType: "match",
+                confidence: 100,
+                product: null,
+                candidates: [],
+                reasoning: `Sada rozložena na ${setData.components.length} komponent`,
+              };
+
+              const componentItems: OfferItem[] = setData.components.map((comp) => ({
+                itemId: generateItemId(),
+                position: setData.parentPosition,
+                originalName: comp.name,
+                unit: "ks",
+                quantity: (setData.quantity ?? 1) * comp.quantity,
+                matchType: comp.result.matchType,
+                confidence: comp.result.confidence,
+                product: comp.result.product,
+                candidates: comp.result.candidates ?? [],
+                reasoning: comp.result.reasoning,
+                priceNote: comp.result.priceNote,
+                reformulatedQuery: comp.result.reformulatedQuery,
+                pipelineMs: comp.result.pipelineMs,
+                parentItemId: parentId,
+                componentRole: comp.role,
+                reviewStatus: "ai_suggestion" as const,
+              }));
+
+              const next = [...prev];
+              next.splice(parentIdx, 1, parentItem, ...componentItems);
+              debouncedSaveItems(next);
+              return next;
+            });
+          }
         } else if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
           const id = batchIdMap[data.position];

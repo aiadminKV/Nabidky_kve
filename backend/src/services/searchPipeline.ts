@@ -43,6 +43,8 @@ export interface ParsedItem {
   unit: string | null;
   quantity: number | null;
   instruction?: string | null;
+  /** Výrobcova katalogová čísla (source_idnlf_raw) — přidají se jako prioritní kandidáti před MATCHER */
+  extraLookupCodes?: string[];
 }
 
 export interface PipelineResult {
@@ -118,7 +120,7 @@ export interface SearchPlanGroup {
 
 export interface SearchPlan {
   groups: SearchPlanGroup[];
-  enrichedItems: Array<ParsedItem & { groupIndex: number }>;
+  enrichedItems: Array<ParsedItem & { groupIndex: number; isSet?: boolean; setHint?: string | null }>;
 }
 
 const PLANNING_PROMPT = `Jsi plánovací agent pro B2B elektroinstalační katalog KV Elektro (~471K položek).
@@ -129,6 +131,27 @@ Dostaneš seznam rozparsovaných položek z poptávky. Analyzuj VŠECHNY najedno
 1. **Seskup** položky do logických skupin podle typu produktu / kategorie (jističe, kabely, svítidla, zásuvky, rozvaděčové komponenty atd.)
 2. **Navrhni** pro každou skupinu preferovaného výrobce a produktovou řadu, pokud to lze z kontextu odvodit
 3. **Obohatí** každou položku instrukcí pro vyhledávací pipeline
+4. **Identifikuj sady** — položky, které se v B2B katalogu prodávají jako KOMPONENTY (zvlášť), ne jako celek
+
+## Detekce sad (isSet)
+Domovní elektroinstalační prvky (vypínače, zásuvky, datové zásuvky, stmívače, termoregulátory) designových řad se v B2B katalogu prodávají ROZLOŽENĚ:
+- **přístroj/strojek** (mechanism) — funkční elektrotechnická část
+- **kryt/čelní deska** (cover) — dekorativní krytka
+- **rámeček** (frame) — montážní a estetický rámeček
+
+isSet = true pokud:
+- zákazník poptává KOMPLETNÍ produkt (vypínač, zásuvka, stmívač...) konkrétní designové řady (Sedna, Tango, Mosaic, Gira...)
+- NEBO pokud z kontextu plyne, že chce hotový výrobek a ne jen komponent
+
+isSet = false pokud:
+- zákazník poptává KONKRÉTNÍ KOMPONENT (jen rámeček, jen strojek, jen kryt)
+- jedná se o průmyslovou zásuvku (CEE/IP44/IP65 — celek)
+- jedná se o produkt který se neprodává rozloženě (jistič, kabel, svítidlo, rozvodnice...)
+
+setHint: pro sady vyplň anglický/český search hint pro web search agenta:
+- Příklad: "Schneider Sedna switch type 6 white mechanism cover frame catalog numbers order codes"
+- Příklad: "ABB Tango socket 230V white components frame mechanism cover catalog numbers"
+- Hint MUSÍ obsahovat "catalog numbers" nebo "order codes" — chceme konkrétní katalogová čísla
 
 ## Jak seskupovat
 - Položky stejného typu do jedné skupiny (všechny jističe, všechny kabely, atd.)
@@ -164,7 +187,15 @@ Vrať VÝHRADNĚ JSON:
   "enrichedItems": [
     {
       "index": 0,
+      "isSet": false,
+      "setHint": null,
       "instruction": "Preferuj výrobce: ABB, řada: S200"
+    },
+    {
+      "index": 2,
+      "isSet": true,
+      "setHint": "Schneider Sedna switch type 6 white components catalog numbers order codes",
+      "instruction": null
     }
   ]
 }
@@ -174,7 +205,7 @@ Vrať VÝHRADNĚ JSON:
 - Každá položka MUSÍ být v právě jedné skupině
 - enrichedItems musí obsahovat záznam pro KAŽDOU položku (i s instruction: null)
 - Skupin může být 1 (všechno stejná kategorie) i N
-- Neměň name, quantity, unit — jen přidáváš instruction a seskupuješ`;
+- Neměň name, quantity, unit — jen přidáváš instruction, isSet, setHint a seskupuješ`;
 
 export async function createSearchPlan(
   items: ParsedItem[],
@@ -208,16 +239,18 @@ export async function createSearchPlan(
   try {
     const parsed = JSON.parse(content) as {
       groups: SearchPlanGroup[];
-      enrichedItems: Array<{ index: number; instruction: string | null }>;
+      enrichedItems: Array<{ index: number; instruction: string | null; isSet?: boolean; setHint?: string | null }>;
     };
 
-    const enrichedItems: Array<ParsedItem & { groupIndex: number }> = items.map((item, i) => {
+    const enrichedItems: Array<ParsedItem & { groupIndex: number; isSet?: boolean; setHint?: string | null }> = items.map((item, i) => {
       const enrichment = parsed.enrichedItems.find((e) => e.index === i);
       const groupIdx = parsed.groups.findIndex((g) => g.itemIndices.includes(i));
       return {
         ...item,
         instruction: enrichment?.instruction ?? item.instruction ?? null,
         groupIndex: Math.max(0, groupIdx),
+        isSet: enrichment?.isSet ?? false,
+        setHint: enrichment?.setHint ?? null,
       };
     });
 
@@ -786,13 +819,19 @@ export async function searchPipelineForItem(
     const fulltextOriginal = searchProductsFulltext(normalizedName, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
     const fulltextReform = searchProductsFulltext(reformulated, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
     const exactPromise = lookupProductsExact(normalizedName, 10).catch(() => [] as ExactResult[]);
-    const [rawEmb, refEmb, ftOriginal, ftReform, exactResults] = await Promise.all([
+    // Extra lookup přes výrobcova katalogová čísla (z decomp agenta) — přidají se do poolu pro MATCHER
+    const extraExactPromises = (item.extraLookupCodes ?? []).map((code) =>
+      lookupProductsExact(code, 3).catch(() => [] as ExactResult[])
+    );
+    const [rawEmb, refEmb, ftOriginal, ftReform, exactResults, ...extraExactResultsArr] = await Promise.all([
       generateQueryEmbedding(normalizedName),
       generateQueryEmbedding(reformulated),
       fulltextOriginal,
       fulltextReform,
       exactPromise,
+      ...extraExactPromises,
     ]);
+    const extraExactResults: ExactResult[] = extraExactResultsArr.flat();
 
     const ftMap = new Map<string, FulltextResult>();
     for (const r of ftOriginal) ftMap.set(r.sku, r);
@@ -833,6 +872,10 @@ export async function searchPipelineForItem(
     let merged = mergeResults(rawResults, refResults);
     merged = mergeWithExisting(merged, fulltextToMerged(fulltextResults));
     merged = mergeWithExisting(merged, exactToMerged(exactResults));
+    // Extra prioritní kandidáti z výrobcových katalogových čísel
+    if (extraExactResults.length > 0) {
+      merged = mergeWithExisting(merged, exactToMerged(extraExactResults));
+    }
     const preFilterCount = merged.length;
     merged = applyStockPostFilter(merged, preferences);
     onDebug?.({
@@ -961,4 +1004,215 @@ export async function searchPipelineForItem(
       exactLookupFound: false,
     };
   }
+}
+
+// ── Set Assembly ──────────────────────────────────────────
+
+export interface SetComponent {
+  name: string;
+  role: "mechanism" | "cover" | "frame" | "module" | "socket" | "other";
+  quantity: number;
+  manufacturerCode: string | null;
+  ean: string | null;
+}
+
+export interface SetPipelineResult {
+  parentPosition: number;
+  parentItemId: string;
+  originalName: string;
+  unit: string | null;
+  quantity: number | null;
+  isSet: true;
+  components: Array<SetComponent & { result: PipelineResult }>;
+  decompositionMs: number;
+  totalPipelineMs: number;
+}
+
+const DECOMP_PROMPT = `Jsi expert na domovní elektroinstalační materiál.
+
+## Úkol
+Rozlož produkt na komponenty prodávané ZVLÁŠŤ v B2B katalozích výrobce.
+Použij web search pro nalezení PŘESNÝCH katalogových čísel výrobce (ne SAP/interní čísla).
+
+## Příklady katalogových čísel
+- Schneider Sedna: SDN0100121, SDN5800121, SDN3100121
+- ABB Tango: 3558A-A651 B, 3901A-B10 B
+- Legrand Mosaic: 067601, 067801, 080251
+
+Tato čísla se vyhledávají v databázi B2B distributorů. Vrať je do pole "manufacturerCode".
+
+## Pravidla
+- manufacturerCode = katalogové/objednací číslo výrobce
+- Pokud si NEJSI JISTÝ zdrojem → nastav manufacturerCode: null. NEVYMÝŠLEJ čísla.
+- Typicky 2-3 komponenty (strojek + kryt/rámeček, nebo strojek + kryt + rámeček)
+- U některých výrobců je kryt součástí strojku → pak jen 2 komponenty
+
+## Formát odpovědi — VÝHRADNĚ JSON
+{
+  "components": [
+    {
+      "name": "strojek spínače č.6 Schneider Sedna bílý",
+      "role": "mechanism",
+      "quantity": 1,
+      "manufacturerCode": "SDN0500121",
+      "ean": null
+    }
+  ]
+}`;
+
+/**
+ * Decompose a set product into components using web search.
+ * Uses OpenAI Responses API with web_search_preview tool.
+ */
+export async function decomposeSet(
+  itemName: string,
+  setHint: string,
+): Promise<{ components: SetComponent[]; ms: number }> {
+  const t0 = Date.now();
+
+  const client = openai();
+  const response = await (client as unknown as {
+    responses: {
+      create: (p: unknown) => Promise<{
+        output: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
+      }>;
+    };
+  }).responses.create({
+    model: PIPELINE_MODEL,
+    reasoning: { effort: "low" },
+    tools: [{ type: "web_search_preview" }],
+    input: [
+      { role: "system", content: DECOMP_PROMPT },
+      { role: "user", content: `Produkt: "${itemName}"\nWeb search hint: "${setHint}"\n\nNajdi komponenty a jejich katalogová čísla výrobce.` },
+    ],
+  });
+
+  const ms = Date.now() - t0;
+
+  let text = "";
+  for (const block of response.output) {
+    if (block.type === "message" && block.content) {
+      for (const c of block.content) {
+        if (c.type === "output_text" && c.text) text += c.text;
+      }
+    }
+  }
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return { components: [], ms };
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      components: Array<{
+        name: string;
+        role: string;
+        quantity: number;
+        manufacturerCode?: string | null;
+        ean?: string | null;
+      }>;
+    };
+    return {
+      components: (parsed.components ?? []).map((c) => ({
+        name: c.name,
+        role: (c.role ?? "other") as SetComponent["role"],
+        quantity: c.quantity ?? 1,
+        manufacturerCode: c.manufacturerCode ?? null,
+        ean: c.ean ?? null,
+      })),
+      ms,
+    };
+  } catch {
+    return { components: [], ms };
+  }
+}
+
+/**
+ * Full set pipeline:
+ *   1. Decompose set into components (web search → manufacturer codes)
+ *   2. For each component, run searchPipelineForItem (with extraLookupCodes from decomp)
+ *   3. Return parent + component results
+ */
+export async function searchPipelineForSet(
+  item: ParsedItem & { isSet: true; setHint: string },
+  position: number,
+  parentItemId: string,
+  onDebug?: PipelineDebugFn,
+  preferences?: SearchPreferences,
+  groupContext?: GroupContext,
+): Promise<SetPipelineResult> {
+  const t0 = Date.now();
+
+  onDebug?.({ position, step: "set_decompose_start", data: { name: item.name, setHint: item.setHint } });
+
+  const { components, ms: decompMs } = await decomposeSet(item.name, item.setHint);
+
+  onDebug?.({
+    position,
+    step: "set_decompose_done",
+    data: {
+      componentCount: components.length,
+      decompMs,
+      components: components.map((c) => ({ name: c.name, role: c.role, code: c.manufacturerCode })),
+    },
+  });
+
+  if (components.length === 0) {
+    onDebug?.({ position, step: "set_fallback_single", data: { reason: "no components from decomposition" } });
+    const singleResult = await searchPipelineForItem(item, position, onDebug, preferences, groupContext);
+    return {
+      parentPosition: position,
+      parentItemId,
+      originalName: item.name,
+      unit: item.unit,
+      quantity: item.quantity,
+      isSet: true,
+      components: [{
+        name: item.name,
+        role: "other",
+        quantity: 1,
+        manufacturerCode: null,
+        ean: null,
+        result: singleResult,
+      }],
+      decompositionMs: decompMs,
+      totalPipelineMs: Date.now() - t0,
+    };
+  }
+
+  const componentResults = await Promise.all(
+    components.map((comp, i) => {
+      const codes: string[] = [];
+      if (comp.manufacturerCode) codes.push(comp.manufacturerCode);
+      if (comp.ean) codes.push(comp.ean);
+
+      const compItem: ParsedItem = {
+        name: comp.name,
+        unit: "ks",
+        quantity: comp.quantity,
+        instruction: groupContext?.preferredManufacturer
+          ? `Preferuj výrobce: ${groupContext.preferredManufacturer}${groupContext.preferredLine ? `, řada: ${groupContext.preferredLine}` : ""}`
+          : null,
+        extraLookupCodes: codes.length > 0 ? codes : undefined,
+      };
+
+      return searchPipelineForItem(compItem, position * 100 + i, onDebug, preferences, groupContext);
+    }),
+  );
+
+  const totalPipelineMs = Date.now() - t0;
+
+  return {
+    parentPosition: position,
+    parentItemId,
+    originalName: item.name,
+    unit: item.unit,
+    quantity: item.quantity,
+    isSet: true,
+    components: components.map((comp, i) => ({
+      ...comp,
+      result: componentResults[i]!,
+    })),
+    decompositionMs: decompMs,
+    totalPipelineMs,
+  };
 }

@@ -30,6 +30,15 @@ const MATCH_TYPE_LABELS: Record<string, string> = {
   processing: "Zpracovávám…",
 };
 
+const COMPONENT_ROLE_LABELS: Record<string, string> = {
+  mechanism: "Strojek",
+  cover: "Kryt",
+  frame: "Rámeček",
+  module: "Modul",
+  socket: "Zásuvka",
+  other: "Díl",
+};
+
 function ReasoningPopover({ item }: { item: OfferItem }) {
   const [open, setOpen] = useState(false);
   if (!item.reasoning && !item.reformulatedQuery) return null;
@@ -303,14 +312,15 @@ export function ResultsTable({
   const amberButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed";
   const primaryButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl bg-kv-red px-4.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed";
 
-  const matchedCount = items.filter((i) => i.matchType !== "not_found" || i.confirmed).length;
+  const topLevelItems = items.filter((i) => !i.parentItemId);
+  const matchedCount = topLevelItems.filter((i) => i.matchType !== "not_found" || i.confirmed).length;
   const doneCount = items.filter((i) => !searchingSet.has(i.itemId)).length;
   const isSearching = searchingSet.size > 0;
-  const notFoundCount = items.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
-  const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed").length;
+  const notFoundCount = topLevelItems.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
+  const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed" && !i.parentItemId).length;
   const unitMismatchCount = items.filter((i) => i.product && hasUnitMismatch(i.unit, i.product.unit)).length;
   const priceNoteCount = items.filter((i) => i.priceNote).length;
-  const uncertainCount = items.filter((i) => i.matchType === "uncertain" || i.matchType === "alternative").length;
+  const uncertainCount = items.filter((i) => (i.matchType === "uncertain" || i.matchType === "alternative") && !i.parentItemId).length;
 
   const extraColumnKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -332,7 +342,7 @@ export function ResultsTable({
           <div className="flex flex-wrap items-center gap-2 min-w-0">
             <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-kv-navy">Položky nabídky</h2>
             <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-kv-gray-500">
-              {matchedCount}/{items.length} nalezeno
+              {matchedCount}/{topLevelItems.length} nalezeno
             </span>
             {unreviewedCount > 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-700">
@@ -527,6 +537,8 @@ export function ResultsTable({
               const isCurrentlySearching = searchingSet.has(item.itemId);
               const justChanged = changedPositions?.has(item.position) ?? false;
               const isReviewed = item.reviewStatus === "reviewed";
+              const isComponent = !!item.parentItemId;
+              const isSetParent = !isComponent && items.some((i) => i.parentItemId === item.itemId);
               return (
                 <SortableRow
                   key={item.itemId}
@@ -534,13 +546,25 @@ export function ResultsTable({
                   isCurrentlySearching={isCurrentlySearching}
                   justChanged={justChanged}
                   isReviewed={isReviewed}
-                  isDragDisabled={isProcessing || isCurrentlySearching}
-                  onInsertAt={onInsertAt}
+                  isDragDisabled={isProcessing || isCurrentlySearching || isComponent}
+                  onInsertAt={isComponent ? undefined : onInsertAt}
                   isLastRow={idx === items.length - 1}
-                  onClick={() => !isCurrentlySearching && onItemClick(item)}
+                  onClick={() => !isCurrentlySearching && !isSetParent && onItemClick(item)}
                 >
-                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400">{item.position + 1}</td>
-                  <td className="px-4 py-2.5 text-sm text-kv-dark">
+                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400">
+                    {isComponent ? "" : item.position + 1}
+                  </td>
+                  <td className={`px-4 py-2.5 text-sm text-kv-dark ${isComponent ? "pl-10" : ""}`}>
+                    {isComponent && (
+                      <span className="mr-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
+                        {COMPONENT_ROLE_LABELS[item.componentRole ?? ""] ?? item.componentRole ?? "?"}
+                      </span>
+                    )}
+                    {isSetParent && (
+                      <span className="mr-1.5 inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 border border-violet-200">
+                        SADA
+                      </span>
+                    )}
                     {item.originalName}
                   </td>
                   <td className="px-4 py-2.5 text-sm tabular-nums text-kv-dark">
