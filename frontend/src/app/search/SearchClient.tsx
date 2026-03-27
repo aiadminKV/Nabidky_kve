@@ -6,6 +6,7 @@ import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StockBadge } from "@/components/StockBadge";
 import { ProductInfoPopover } from "@/components/ProductInfoPopover";
+import { ProductThumbnail } from "@/components/ProductThumbnail";
 import { createClient } from "@/lib/supabase/client";
 import {
   standaloneSearch,
@@ -350,28 +351,31 @@ export function SearchClient({ email, isAdmin }: SearchClientProps) {
                       <p className="text-xs text-kv-gray-400 mb-2">Přeformulováno: <span className="font-medium text-kv-gray-600">{result.reformulatedQuery}</span></p>
                     )}
                     {result.product ? (
-                      <>
-                        <h2 className="text-base font-bold text-kv-dark">{result.product.name}</h2>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                          {result.product.manufacturer && (
-                            <span className="text-xs text-kv-gray-400">{result.product.manufacturer}</span>
+                      <div className="flex items-start gap-4">
+                        <ProductThumbnail sku={result.product.sku} name={result.product.name} size="lg" />
+                        <div className="min-w-0">
+                          <h2 className="text-base font-bold text-kv-dark">{result.product.name}</h2>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                            {result.product.manufacturer && (
+                              <span className="text-xs text-kv-gray-400">{result.product.manufacturer}</span>
+                            )}
+                            {result.product.sku && (
+                              <span className="flex items-center gap-1">
+                                <span className="font-mono text-xs text-kv-gray-500">{result.product.sku}</span>
+                                <CopyButton text={result.product.sku} />
+                              </span>
+                            )}
+                            <StockBadge product={result.product} token={token} />
+                            <ProductInfoPopover product={result.product} />
+                          </div>
+                          {result.product.current_price != null && (
+                            <p className="mt-2 text-lg font-black text-kv-dark">
+                              {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(result.product.current_price)}
+                              <span className="ml-1.5 text-xs font-normal text-kv-gray-400">bez DPH</span>
+                            </p>
                           )}
-                          {result.product.sku && (
-                            <span className="flex items-center gap-1">
-                              <span className="font-mono text-xs text-kv-gray-500">{result.product.sku}</span>
-                              <CopyButton text={result.product.sku} />
-                            </span>
-                          )}
-                          <StockBadge product={result.product} token={token} />
-                          <ProductInfoPopover product={result.product} />
                         </div>
-                        {result.product.current_price != null && (
-                          <p className="mt-2 text-lg font-black text-kv-dark">
-                            {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(result.product.current_price)}
-                            <span className="ml-1.5 text-xs font-normal text-kv-gray-400">bez DPH</span>
-                          </p>
-                        )}
-                      </>
+                      </div>
                     ) : (
                       <p className="text-sm font-medium text-kv-gray-500">Produkt nenalezen v katalogu</p>
                     )}

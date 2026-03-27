@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { getProductImageUrl } from "@/lib/types";
 
 interface ProductInfo {
   name: string;
@@ -97,6 +98,20 @@ export function ProductInfoPopover({ product, size = "sm" }: ProductInfoPopoverP
           } right-0`}
         >
           <div className="px-4 py-3 border-b border-kv-gray-100">
+            {(() => {
+              const imgUrl = getProductImageUrl(product.sku, "L");
+              return imgUrl ? (
+                <div className="mb-3 flex items-center justify-center rounded-lg bg-kv-gray-50 border border-kv-gray-100 overflow-hidden h-32">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={imgUrl}
+                    alt={product.name}
+                    className="max-h-full max-w-full object-contain p-2"
+                    onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = "none"; }}
+                  />
+                </div>
+              ) : null;
+            })()}
             <p className="text-sm font-semibold text-kv-gray-900 leading-snug">{product.name}</p>
             {product.name_secondary && (
               <p className="mt-0.5 text-xs text-kv-gray-500 leading-snug">{product.name_secondary}</p>

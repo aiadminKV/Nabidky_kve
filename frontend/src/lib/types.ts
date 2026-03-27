@@ -1,3 +1,17 @@
+/**
+ * Constructs the product image URL from KV Elektro API.
+ * Size "S" = small thumbnail, "L" = large (default).
+ * Pattern: https://www.kvelektro.cz/api/products/{sku}/images/{size}/{sku}.jpg
+ */
+export function getProductImageUrl(
+  sku: string | undefined | null,
+  size: "S" | "L" = "L",
+): string | null {
+  if (!sku) return null;
+  const encoded = encodeURIComponent(sku);
+  return `https://www.kvelektro.cz/api/products/${encoded}/images/${size}/${encoded}.jpg`;
+}
+
 /** Generate a stable 8-char hex item ID (unique within an offer) */
 export function generateItemId(): string {
   if (typeof crypto !== "undefined" && crypto.getRandomValues) {

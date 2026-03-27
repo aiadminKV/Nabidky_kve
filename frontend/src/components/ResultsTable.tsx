@@ -4,6 +4,7 @@ import { useMemo, useState, useCallback } from "react";
 import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover } from "./ProductInfoPopover";
+import { ProductThumbnail } from "./ProductThumbnail";
 import { StockBadge } from "./StockBadge";
 import {
   DndContext,
@@ -596,14 +597,19 @@ export function ResultsTable({
                   ))}
                   <td className="px-4 py-2.5">
                     <div className="max-w-[300px]">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
+                        {item.product && !isCurrentlySearching && (
+                          <ProductThumbnail sku={item.product.sku} name={item.product.name} size="sm" />
+                        )}
+                        <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
                         <span className="text-sm text-kv-dark truncate">
                           {item.product?.name ?? (isCurrentlySearching ? "" : "—")}
                         </span>
                         {item.product && !isCurrentlySearching && (
                           <ProductInfoPopover product={item.product} />
                         )}
-                      </div>
+                        </div>
                       {item.product && !isCurrentlySearching && (
                         <div className="flex items-center gap-2 mt-0.5">
                           {item.product.manufacturer && (
@@ -635,6 +641,8 @@ export function ResultsTable({
                           <span>EAN/kód nenalezen v katalogu</span>
                         </div>
                       )}
+                        </div>{/* end min-w-0 */}
+                      </div>{/* end flex items-center gap-2 */}
                     </div>
                   </td>
                   <td className="px-4 py-2.5 text-right">

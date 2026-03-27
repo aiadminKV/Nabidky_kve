@@ -325,6 +325,64 @@ async function chatComplete(opts: {
   return res.choices[0]?.message?.content ?? null;
 }
 
+// ── Code Extractor ────────────────────────────────────────
+
+const CODE_EXTRACTOR_PROMPT = `Jsi expert na B2B elektroinstalační katalogy (KV Elektro, ~471K položek).
+
+Tvůj úkol: z textu poptávky extrahuj kódy, které vypadají jako katalogová nebo objednací čísla výrobce, nebo EAN kódy produktů.
+
+## Co JE kód produktu — extrahuj
+- Katalogová/objednací čísla výrobce: GXRE165, SDN0500121, 6EP1333-1LB00, LED-WSL-18W/4100, 3558A-A651 B, PL6-B16/1
+- Typy/modely produktu identifikující konkrétní SKU: S201-B16, PFGM-16/2/003-B, GXRE288
+- EAN kód (13místné číslo): 4015081677733
+- Kombinace písmen a číslic tvořící jednoznačný identifikátor konkrétního výrobku
+
+## Co NENÍ kód produktu — NEextrahuj
+- Elektrické parametry: 330mA, 180-265V, 50/60Hz, 44W, 16A, 25A, 230V, 400V, 10kA, 6kA
+- Průřezy a rozměry: 3x1,5mm², 2,5mm², 5x2,5, 20mm, 100m, 3×2,5
+- Výrobci samotní bez modelu: GREENLUX, ABB, Schneider, Hager, OEZ, Legrand (jen jméno = ne kód)
+- Obecná slova a anglické výrazy: Input, Output, Max, Model, Type, Current, Driver, Constant
+- IP krytí: IP65, IP44, IP20
+- Charakteristiky jističů samotné: B16, C25, D10 (ale S201-B16 jako celek = ano)
+- Teplotní hodnoty: -25°C, 40°C
+
+## Příklady
+Vstup: "Constant Current LED Driver GREENLUX model GXRE165, Input 180-265V 50/60Hz, Output 90-120V 330mA, Max 44W"
+Výstup: {"codes": ["GXRE165"]}
+
+Vstup: "jistič ABB S201-B16 1-pólový 16A charakteristika B"
+Výstup: {"codes": ["S201-B16"]}
+
+Vstup: "kabel CYKY-J 3x1,5 instalační 100m"
+Výstup: {"codes": []}
+
+Vstup: "Zásuvka Schneider Electric Sedna SDN3502121 bílá 2x230V"
+Výstup: {"codes": ["SDN3502121"]}
+
+Vstup: "chránič OEZ PFGM-16/2/003-B 16A 2P 30mA typ B"
+Výstup: {"codes": ["PFGM-16/2/003-B"]}
+
+Vstup: "svítidlo LED panel 60x60 40W 4000K IP44"
+Výstup: {"codes": []}
+
+Vrať VÝHRADNĚ JSON: {"codes": ["KÓD1", "KÓD2"]}
+Pokud žádný kód, vrať: {"codes": []}`;
+
+export async function extractProductCodes(text: string): Promise<string[]> {
+  const content = await chatComplete({
+    system: CODE_EXTRACTOR_PROMPT,
+    user: text,
+    json: true,
+  });
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content) as { codes?: string[] };
+    return (parsed.codes ?? []).filter((c) => typeof c === "string" && c.length >= 4);
+  } catch {
+    return [];
+  }
+}
+
 // ── Step 1: LLM Reformulation ─────────────────────────────
 
 const REFORM_PROMPT = `Přeformuluj název elektrotechnického produktu do formy, která nejlépe odpovídá českému B2B katalogu elektroinstalačního materiálu (KV Elektro).
@@ -812,15 +870,25 @@ export async function searchPipelineForItem(
     const normalizedName = normalizeQuery(item.name);
     onDebug?.({ position, step: "normalize", data: { original: item.name, normalized: normalizedName } });
 
-    const reformulated = await reformulate(normalizedName, item.instruction);
+    // Reformulation + code extraction run in parallel
+    const [reformulated, aiExtractedCodes] = await Promise.all([
+      reformulate(normalizedName, item.instruction),
+      extractProductCodes(normalizedName),
+    ]);
     onDebug?.({ position, step: "reformulation", data: { original: normalizedName, reformulated } });
+    if (aiExtractedCodes.length > 0) {
+      onDebug?.({ position, step: "code_extraction", data: { codes: aiExtractedCodes } });
+    }
+
+    // Merge AI-extracted codes with any codes passed in from decomp agent
+    const allExtraCodes = [...new Set([...(item.extraLookupCodes ?? []), ...aiExtractedCodes])];
 
     // Parallel fan-out: embeddings + fulltext + exact
     const fulltextOriginal = searchProductsFulltext(normalizedName, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
     const fulltextReform = searchProductsFulltext(reformulated, MAX_RESULTS_FULLTEXT, undefined, undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]);
     const exactPromise = lookupProductsExact(normalizedName, 10).catch(() => [] as ExactResult[]);
-    // Extra lookup přes výrobcova katalogová čísla (z decomp agenta) — přidají se do poolu pro MATCHER
-    const extraExactPromises = (item.extraLookupCodes ?? []).map((code) =>
+    // Extra lookup přes výrobcova katalogová čísla — z decomp agenta + AI extrakce z textu poptávky
+    const extraExactPromises = allExtraCodes.map((code) =>
       lookupProductsExact(code, 3).catch(() => [] as ExactResult[])
     );
     const [rawEmb, refEmb, ftOriginal, ftReform, exactResults, ...extraExactResultsArr] = await Promise.all([
@@ -850,6 +918,8 @@ export async function searchPipelineForItem(
         fulltextMergedCount: fulltextResults.length,
         exactCount: exactResults.length,
         exactTopMatch: exactResults[0]?.match_type ?? null,
+        aiExtractedCodes,
+        extraExactCount: extraExactResults.length,
       },
     });
 
