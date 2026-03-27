@@ -1,0 +1,535 @@
+CLASS;KSCHL
+101;Obchodní zboží
+102;Služby
+10201;Služby nákup
+1020101;Neoceněný materiál
+1020102;Kancelářské potřeby
+1020103;Kancelářské potřebyv
+1020104;Papír
+1020105;Tonery a PC
+1020106;Reklamní před. tašky
+1020107;Pracovní oblečení
+1020108;Spotřeba mat. údržba
+1020109;Autopotřeby doprava
+1020110;Obaly - spotřeba
+1020111;Hygienické potřeby
+1020112;Nápoje, potraviny
+10202;Služby prodej
+1020201;Služby prodej
+1020202;Služby přefakturace
+103;Obaly
+401;Baterie, svítilny a příslušentví
+40101;Baterie, svítilny a příslušentví
+4010101;Akumulátory
+4010102;Baterie
+4010103;Svítilny
+4010104;Nabíječky
+402;Domovní spínače a zásuvky
+40201;ABB
+4020101;Swing, SwingL
+4020102;Classic
+4020103;Tango
+4020104;Element, Time
+4020105;Alpha exclusive
+4020106;Solo, Solo carat
+4020107;Impuls
+4020108;Vyšší krytí IP
+4020109;Mechanismy, strojky
+4020110;Reflex SI
+4020111;Future linear
+4020112;AudioWorld
+4020113;Zoni
+4020115;Neo, Neo Tech
+4020116;Free@home
+4020118;Busch-axcent
+4020119;Decento
+4020121;Levit
+40202;Berker
+4020202;BERKER OSTATNÍ
+4020203;BERKER MODUL2
+4020204;BERKER S.1
+4020205;BERKER B.1
+4020206;BERKER B.3
+4020207;BERKER B.7 GLAS
+4020208;BERKER PRISTROJE
+4020209;BERKER Q.1/Q.3
+4020210;BERKER K.1/K.5
+4020211;BERKER ARSYS
+4020213;BERKER S1930
+4020214;BERKER TS
+4020215;BERKER R.1/R.3
+40203;Niko
+4020301;ORIGINAL
+4020302;INTENSE
+4020303;PURE
+4020304;NIKO ostatní
+4020305;NIKOBUS
+4020306;MYSTERIOUS
+40204;Gira
+4020401;STANDARD55
+4020402;E2
+4020403;EVENT
+4020404;ESPIRIT
+4020405;E22
+4020406;GIRA Flaschenschalt.
+4020407;SCOLOR
+4020408;PROFIL55
+4020409;GIRA ostatní
+40207;Logus 90
+4020701;Logus 90
+40208;Legrand
+4020801;Valena Life
+4020802;Valena
+4020803;Cariva
+4020804;Ostatní
+4020805;Galea Life
+4020806;Céliane
+4020807;Niloé
+4020808;Plexo
+4020809;Mosaic
+4020810;Niloé Step
+4020811;Suno
+40209;Ostatní, 45x45
+4020901;Ostatní, 45x45
+40210;Schneider
+4021001;UNICA CLASS
+4021002;SEDNA Design/Element
+4021003;SEDNA
+4021004;CEDAR
+4021005;UNICA TOP
+4021006;UNICA PLUS
+4021007;UNICA ALLEGRO
+4021008;MERTEN
+4021009;UNICA BASIC
+4021010;UNICA strojky
+4021011;Nová UNICA
+4021012;UNICA QUADRO
+4021013;ASFORA
+4021014;UNICA COLORS
+4021015;MUREVA STYL
+4021016;ELSO
+40211;Bticino
+4021101;Axolute
+4021102;Living.Light
+4021103;Ostatní Bticino
+4021104;Living Now
+40212;-
+4021201;-
+40213;Vestavné a šňůrové
+4021301;Vestavné a šňůrové
+403;Hromosvody
+40301;Hromosvody
+4030101;Svorky
+4030102;Podpěry vedení
+4030103;Držáky, tyče, desky
+4030104;Vodiče
+4030105;Oddálený hromosvod
+4030106;Příslušenství
+404;Kabelový spojovací, izolační materiál
+40401;Kabelový spojovací materiál
+4040101;Kabelové konektory
+4040102;Kabelová oka
+4040103;Kabelové spojky
+4040104;Kabelové dutinky
+40402;Označování, smršťování, izolace
+4040201;-
+4040202;Bužírky, smršťovačky
+4040203;Izolační pásky
+4040204;Desky, folie
+4040205;Ostatní
+4040206;Kabelové štítky
+40403;Kabelové spojky sady
+4040301;Kabelové spojky sady
+405;Kabely a vodiče
+40501;Kabely silové
+4050101;CYKY, CYKYLo, CYKYz
+4050102;AYKY, AYKYz
+4050103;PVC
+4050104;Gumové
+4050105;CMSM, CMFM
+4050106;Ostatní
+4050107;1 YY, 1 AYY
+4050108;-
+40502;Kabely sdělovací
+4050201;CYH, SCY, LSPR, MK
+4050202;SYKFY
+4050203;JYTY, JQTQ
+4050204;TCEPKxx a telefonní
+4050205;UTP, FTP, STP
+4050206;Koaxiální
+4050207;-
+4050208;J-Y(ST)Y a ostatní
+4050209;Optické
+40503;Kabely ostatní
+4050301;Nehořlavé
+4050302;Ostatní
+40504;Vodiče
+4050401;CY
+4050402;CYA
+4050403;SIF, CSA
+4050404;Vodiče Ostatní
+406;Kondenzátory a elektronika
+40601;Kondenzátory
+4060101;Ostatní
+4060102;Rozběhové
+4060103;Kompenzační
+40602;Drobná elektronika
+4060201;-
+4060202;Drobná elektronika
+407;Modulové přístroje
+40701;Proudové chrániče
+4070101;Proudové chrániče
+40702;Propojovací lišty
+4070201;Propojovací lišty
+40703;Jističe do 125A
+4070301;Jističe do 125A
+40704;Relé modulové
+4070401;Časové relé
+4070402;Impulsní, proudové
+40705;Spínací hodiny
+4070501;Spínací hodiny
+40706;Relé paticové, do panelu, DPS, krabic
+4070601;Impulsní, spínací
+4070602;Časová
+4070603;Patice k relé, přísl
+40707;Instalační stykače
+4070701;Instalační stykače
+40708;Vypínače, signálky, zvonky
+4070801;Zvonky a bzučáky
+4070802;Vypínače, přepínače
+4070803;Signálky
+40709;Svodiče přepětí
+4070901;Svodiče přepětí
+40710;Elektroměry a měření
+4071001;Elektroměry a měření
+40711;Motorové spouštěče
+4071101;Motorové spouštěče
+40712;Ostatní, příslušen.
+4071201;Ostatní, příslušen.
+408;Nářadí, měřící přístroje, zahrada
+40801;Sádra, chemie
+4080101;Sádra, chemie
+40802;Popisovače
+4080201;Popisovače
+40803;Kufry, brašny, boxy
+4080301;Kufry, brašny, boxy
+40804;Zkoušečky a měřáky
+4080401;Zkoušečky a měřáky
+40805;Nářadí
+4080501;Vrtáky, sekáče
+4080502;Šroubováky
+4080503;Protahovací pera
+4080504;Nože, odizolování
+4080505;Kleště lisovací
+4080506;Kleště štípací
+4080507;Kleště montážní
+4080508;Klíče, bity, goly
+4080509;Pily, kladiva
+4080510;Lasery, metry
+4080511;Nářadí Ostatní
+40806;Nářadí elektrické
+4080601;Nářadí AKU
+4080602;Nářadí 230V
+40807;Ochranné pomůcky
+4080701;Pracovní ochrana
+4080702;Ochrana COVID-19
+40808;Žebříky, štafle
+4080801;Žebříky, štafle
+40809;Zahrada a volny čas
+4080901;Grilování
+4080902;Zavlažování
+4080903;Volný čas
+409;Automatizace, detekce, ovládací hlavice
+40901;Automatizace, ovládání, signalizace
+4090104;Ovládací hlavice
+4090106;Bezpečnost.relé, PLC
+4090107;Sirény, majáky
+40902;Frekvenční měniče, softstartery, motory
+4090201;Elektromotory
+4090202;Frekvenční  měniče
+40903;Detekce, polohové a tlakové spínače
+4090301;Polohové spínače
+4090302;Tlakové spínače
+4090303;Indukční spínače
+410;Pojistky, odpínače
+41001;Pojistky
+4100101;Nožové pojistky
+4100102;Válcové pojistky
+4100103;D pojistky
+4100104;Trubičkové pojistky
+4100105;Autopojistky
+4100106;Ostatní pojistky
+41002;Pojistkové odpínače a odpojovače
+4100201;Válcové odpínače
+4100202;Nožové odpínače
+4100203;Ostatní, přísluš.
+41003;Příslušenství, spodky, hlavice
+4100301;Ostatní, přísluš.
+4100302;Pojistkové spodky
+411;Rozvaděče a rozvodnice
+41101;Rozvodnice modulové do 125A
+4110101;Plastové rozvodnice
+4110102;Oceloplastové rozv.
+4110103;Rozvodnice s krytím
+4110104;Rozvodnice přísluš
+4110105;Velkoobsahové rozv.
+41102;Rozvaděče, skříně nad 63A
+4110201;Rozvaděče sestavy
+4110202;Monobloky plastové
+4110203;Monobloky plechové
+4110204;Rozvaděče přísluš.
+41103;Rozvaděče elektroměrové
+4110301;Plastové, betonové
+4110303;Plechové
+41104;Rozvaděče pojistkové
+4110401;Rozvaděče pojistkové
+41105;Rozvaděče plynové
+4110501;Rozvaděče plynové
+41106;Příslušenství
+4110601;Příslušenství
+41107;Přípojnicové systémy
+4110701;Přípojnicové systémy
+412;Sdělovací a zabezpečovací technika
+41201;Vstupní systémy, bezdrátové ovládání
+4120101;Audio video sady
+4120102;Domácí telefony
+4120103;Tlačítkové panely
+4120104;My Home, KNX, INELS
+4120105;Zdroje, příslušenst.
+4120106;Elektrické zámky
+4120107;Bezdrátové ovládání
+41202;AV, TV technika Předkonektorované kabely
+4120201;HDMI, TV kabely
+4120202;AV a TV konektory
+4120203;Rozbočovače
+41203;Zvonky a gongy
+4120301;Zvonky a gongy
+41204;Pohybová a kouřová čidla
+4120401;Pohybová čidla
+4120402;Kouřová, plyn. čidla
+41205;Zabezpeč. technika
+4120501;Zabezpeč. technika
+41206;Záložní zdroje UPS
+4120601;Záložní zdroje UPS
+41207;Datová technika
+4120701;Datové konektory
+4120702;Patchkabely
+4120703;Patchpanely
+4120704;Datové rozvaděče
+413;Světelné zdroje
+41301;Světelné zdroje LED
+4130101;LED Žárovky závitové
+4130102;LED Žárovky paticové
+4130103;LED Trubice
+41302;Světelné zdroje LED pásky a profily
+4130201;Profily, příslušen.
+4130202;LED pásky
+4130203;LED moduly
+41303;Světelné zdroje Klasické
+4130301;Žárovky průmyslové
+4130302;Žárovky halogenové
+4130303;Výbojky
+41304;Světelné zdroje Úsporné
+4130401;Paticové
+4130402;Závitové
+4130403;Trubice
+41305;Světelné zdroje Autožárovky
+4130501;Autožárovky
+415;Svítidla
+41501;Svítidla LED
+4150101;Nouzová LED
+4150102;Průmyslová LED
+4150103;Interiérová LED
+4150104;Exteriérová LED
+4150105;Veřejné osvětl. LED
+4150106;Reflektory LED
+4150107;Panely LED
+4150108;Lištová svítidla LED
+41502;Svítidla Klasická
+4150201;Nouzová klasická
+4150202;Průmyslová klasická
+4150203;Interiérová klasická
+4150204;Exteriérová klasická
+4150205;Veřejné osvětl. Klas
+4150206;Reflektory klasické
+4150207;Lištová svít. klas.
+41503;Příslušenství
+4150301;Předřadníky, drivery
+4150302;Startery, zapalovače
+4150303;Objímky, patice
+4150304;Piktogramy, zdroje
+4150305;Závěsy, rámy, skla
+4150306;Lišty, lištové prvky
+41504;Stožáry, výložníky
+4150401;Stožáry do 6m
+4150402;Stožáry nad 6m
+4150403;Výložníky
+41505;Sváteční osvětlení
+4150501;Vánoční řetězy
+4150502;Vánoční dekorace
+416;Svorky a svorkovnice
+41601;Svorky a svorkovnice
+4160101;Svorky krabicové
+4160102;Věněčky, přístrojové
+4160103;Pólové můstky
+4160104;Svorky řadové a stož
+4160105;Svorkovnice rozbočné
+4160106;Svorky propichovací
+4160107;Svorky ostatní
+4160108;Konektory průmyslové
+417;Topná technika
+41701;Ohřev vzduchu
+4170101;Topné kabely
+4170102;Akumulační kamna
+4170103;Přímotopy,konvektory
+4170104;Sálavé panely
+4170105;Infrazářiče,osoušeče
+4170106;Topné rohože
+4170107;Topné folie
+41702;Ohřev vody
+4170201;Bojlery, průtokové
+4170202;Elektrokotle
+4170203;Tepelná čerpadla
+41703;Termostaty a čidla
+4170301;Termostaty a čidla
+41704;Příslušenství
+4170401;Topná tělesa
+4170402;Ostat. příslušenství
+418;Transformátory, zdroje a měření
+41801;Transformátory a napájecí zdroje
+4180101;Měřící, proudové
+4180102;Oddělovací a ostatní
+4180103;Napájecí
+41802;Měřící přístroje
+4180201;Elektroměry na kříž
+4180202;Měřáky panelové
+419;Úložný materiál
+41901;Krabice
+4190101;Krabice Do zdi
+4190102;Krabice Na povrch
+4190103;Krabice Do SDK
+4190104;Krabice Do betonu
+4190105;Krabice Do zateplení
+41902;Elektroinstalační lišty a kanály
+4190201;Lišty plastové
+4190202;Kanály plastové
+4190203;Kanály kovové
+4190205;Sloupky a ostatní
+41903;Trubky a hadice
+4190301;Trubky Ohebné plast
+4190302;Trubky Tuhé plast
+4190303;Trubky Kovové
+4190304;Trubky Příslušenství
+41904;Chráničky
+4190401;Chráničky Pevné
+4190402;Chráničky Ohebné
+41905;Vývodky a záslepky
+4190501;Vývodky a záslepky
+41906;Žlaby
+4190601;Žlaby Plechové
+4190602;Žlaby Drátěné
+4190603;Žlaby Žebříky
+4190604;Žlaby Příslušenství
+41907;Do rozvaděčů
+4190701;Vylamovací žlaby
+4190702;Vyplétací spirály
+4190703;DIN lišty
+41908;Upevňovací materiál
+4190801;Stahovací pásky
+4190802;Hmoždinky, šrouby
+4190803;Příchytky, závěsy
+4190804;Svorky SONAP, lanové
+41909;Podlahové, nábytkové systémy
+4190901;Podlahové krabice
+4190902;Podlahové lišty
+4190903;Podlahové kanály
+41910;Ostatní
+4191001;Ostatní
+420;Ventilátory
+42001;Ventilátory Bytové
+4200101;Ventilátory bytové
+4200102;Příslušenství
+42002;Ventilátory Průmyslové
+4200201;Ventilátory průmysl.
+4200202;Příslušenství
+42003;Rekuperace
+4200301;Rekuperace
+421;Vidlice, spojky a prodlužovací přívody
+42101;Vidlice Spojky Přívodky 400V a jiné
+4210101;Vidlice 400V
+4210102;Spojky 400V
+4210105;Zásuvky 400V
+4210106;Přívodky 400V
+4210107;Adaptéry, ost. 400V
+42102;Vidlice Spojky Prodlužovací přívody 230V
+4210201;Vidlice 230V
+4210202;Prodluž přívody 230V
+4210203;Prodlužovací bubny
+4210204;Zásuvkové adaptéry
+4210205;Zásuvky, spojky 230V
+4210206;Flexo šňůry
+42103;Zásuvkové skříně
+4210301;Zásuvkové skříně
+42104;Přísluš., ostatní
+4210401;Přísluš., ostatní
+422;Vačkové a hlavní spínače
+42201;Vačkové a hlavní spínače
+4220101;Vačkové a hl.spínače
+4220102;Příslušenství
+423;Výkonové jističe a stykače
+42301;Výkonové jističe
+4230101;Výkonové  jističe
+4230102;Příslušenství
+42302;Výkonové stykače a ministykače
+4230201;Výkonové stykače
+4230202;Příslušenství
+424;Ostatní
+42401;Různý sortiment
+4240101;Různý, ost.sortiment
+425;Elektronika
+42501;Bílá technika
+4250101;Velké spotřebiče
+4250102;Malé spotřebiče
+42502;Černá technika
+4250201;Počítače, příslušens
+4250202;Audio - video
+4250203;Mobilní telefony
+426;Elektromobilita
+42601;Nabíjecí stanice
+4260101;Nabíjecí Wallboxy
+4260102;Stojanové stanice AC
+4260103;Stojanové stanice DC
+42602;Příslušenství
+4260201;Příslušenství
+427;Fotovoltaika
+42701;Solární měniče
+4270101;Solární měniče
+4270102;-
+42702;Solární kabely
+4270201;Solární kabely
+42703;Solární regulátory
+4270301;Solární regulátory
+42704;Solární panely
+4270401;Solární panely
+42705;Solární akumulátory
+4270501;Solární akumulátory
+42706;Konstrukce pro FVE
+4270601;Hliníkové profily
+4270602;Střešní háky
+4270603;Spojovací materiál
+42707;Solární sestavy
+4270701;Solární sestavy
+42708;Rozvaděče pro FVE
+4270801;Rozvaděče pro FVE
+42709;Solární konektory
+4270901;Solární konektory
+42710;Příslušenství
+4271001;Příslušenství
+490;Obaly
+49001;Kabelové bubny
+4900101;OBALY kabelové bubny
+49002;Obaly
+4900201;Obaly
+909;Nezařazené artikly
+999;Nezařazeno
+999111;Nezařazeno, zkontrol

@@ -42,6 +42,10 @@ coverage/
 *.jsonl
 *.bak
 
-# Large sync data files
-data-model/sync/*.csv
+# Large sync data files (baseline/feed CSVs — too big for git)
+data-model/sync/*matnr*.csv
 data-model/sync/*.bak
+
+# Allow small lookup CSVs needed for Docker build
+!data-model/sync/new_name_of_category.csv
+!data-model/sync/new_status_type.csv
