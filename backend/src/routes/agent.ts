@@ -573,4 +573,46 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
   });
 });
 
+/**
+ * POST /agent/standalone-search
+ * Full pipeline search for a single query — no offer binding.
+ * Returns SSE with item_matched event.
+ */
+agent.post("/agent/standalone-search", authMiddleware, async (c) => {
+  const { query, searchPreferences } = await c.req.json<{
+    query: string;
+    searchPreferences?: SearchPreferences;
+  }>();
+
+  if (!query?.trim()) {
+    return c.json({ error: "Query is required" }, 400);
+  }
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+  c.header("X-Accel-Buffering", "no");
+
+  return streamText(c, async (stream) => {
+    try {
+      await stream.write(sseEvent("status", { phase: "searching" }));
+
+      const result = await searchPipelineForItem(
+        { name: query.trim(), unit: null, quantity: null },
+        0,
+        undefined,
+        searchPreferences,
+      );
+
+      await stream.write(sseEvent("item_matched", result));
+      await stream.write(sseEvent("status", { phase: "done" }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      await stream.write(sseEvent("error", { message: msg }));
+    }
+
+    await stream.write("data: [DONE]\n\n");
+  });
+});
+
 export { agent as agentRoutes };

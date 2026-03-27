@@ -62,6 +62,17 @@ export function parseChat(message: string, token: string) {
   return streamSSE("/agent/chat", { message }, token);
 }
 
+/** Standalone single-product search — no offer binding (SSE) */
+export function standaloneSearch(
+  query: string,
+  token: string,
+  searchPreferences?: SearchPreferences,
+) {
+  const body: Record<string, unknown> = { query };
+  if (searchPreferences) body.searchPreferences = searchPreferences;
+  return streamSSE("/agent/standalone-search", body, token);
+}
+
 /** Search for already-parsed items (SSE) */
 export function searchItems(
   items: Array<{ name: string; unit: string | null; quantity: number | null; instruction?: string | null; isSet?: boolean; setHint?: string | null; parentItemId?: string | null }>,

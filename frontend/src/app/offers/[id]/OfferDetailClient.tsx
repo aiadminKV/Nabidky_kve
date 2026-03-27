@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Header } from "@/components/Header";
 import { ChatPanel } from "@/components/ChatPanel";
 import { AgentDebugPanel } from "@/components/AgentDebugPanel";
@@ -45,6 +45,7 @@ interface OfferDetailClientProps {
 
 export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [offerTitle, setOfferTitle] = useState("");
   const [phase, setPhase] = useState<OfferPhase>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -181,6 +182,41 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     load();
     return () => { cancelled = true; };
   }, [offerId, getToken]);
+
+  // ──────────────────────────────────────────────────────────
+  // Handle ?addSku=&addName= from standalone search redirect
+  // ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (loadingOffer) return;
+    const addSku = searchParams.get("addSku");
+    const addName = searchParams.get("addName");
+    if (!addSku && !addName) return;
+
+    // Remove params from URL without re-render
+    router.replace(`/offers/${offerId}`, { scroll: false });
+
+    const newItem: OfferItem = {
+      itemId: generateItemId(),
+      position: offerItems.length,
+      originalName: addName ?? addSku ?? "Nová položka",
+      unit: null,
+      quantity: 1,
+      matchType: "not_found",
+      confidence: 0,
+      product: null,
+      candidates: [],
+    };
+
+    setOfferItems((prev) => {
+      const next = [...prev, newItem];
+      debouncedSaveItems(next);
+      return next;
+    });
+    setPhase("review");
+    addMessage("system", `Položka "${newItem.originalName}" přidána z vyhledávání. Spusťte vyhledávání nebo přiřaďte produkt ručně.`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingOffer]);
 
   // ──────────────────────────────────────────────────────────
   // Auto-save messages (debounced)

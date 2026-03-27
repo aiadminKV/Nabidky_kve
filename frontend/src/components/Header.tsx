@@ -17,6 +17,7 @@ export function Header({ email, isAdmin, offerTitle }: HeaderProps) {
 
   const navItems = [
     { href: "/offers", label: "Nabídky" },
+    { href: "/search", label: "Vyhledávání" },
     ...(isAdmin ? [{ href: "/pricelist", label: "Ceník" }] : []),
   ];
 
