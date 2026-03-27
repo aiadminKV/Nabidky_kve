@@ -4,30 +4,19 @@ import { useState } from "react";
 import type { OfferHeader } from "@/lib/types";
 import { DatePicker } from "./DatePicker";
 import { AddressAutocomplete } from "./AddressAutocomplete";
+import { CustomerAutocomplete } from "./CustomerAutocomplete";
 
 interface OfferHeaderFormProps {
   header: OfferHeader;
   onChange: (header: OfferHeader) => void;
   forceExpanded?: boolean;
+  getToken?: () => Promise<string>;
 }
-
-const PRIMARY_TEXT_FIELDS: Array<{
-  key: keyof OfferHeader;
-  label: string;
-  placeholder: string;
-  grow?: boolean;
-}> = [
-  { key: "customerId", label: "ID zákazníka", placeholder: "123456" },
-  { key: "customerIco", label: "IČ", placeholder: "12345678" },
-  { key: "customerName", label: "Zákazník", placeholder: "Firma s.r.o.", grow: true },
-  { key: "offerName", label: "Zakázka", placeholder: "RD Kocourkov", grow: true },
-];
 
 const SECONDARY_TEXT_FIELDS: Array<{
   key: keyof OfferHeader;
   label: string;
   placeholder: string;
-  grow?: boolean;
 }> = [
   { key: "phone", label: "Telefon", placeholder: "777 999 777" },
   { key: "email", label: "Email", placeholder: "info@firma.cz" },
@@ -63,7 +52,71 @@ function TextField({
   );
 }
 
-export function OfferHeaderForm({ header, onChange, forceExpanded = false }: OfferHeaderFormProps) {
+/** Customer section — shows CustomerAutocomplete (when getToken provided) or plain text fields */
+function CustomerSection({
+  header,
+  onChange,
+  getToken,
+}: {
+  header: OfferHeader;
+  onChange: (key: keyof OfferHeader, value: string) => void;
+  getToken?: () => Promise<string>;
+}) {
+  const handleCustomerSelect = (name: string, id: string, ico: string) => {
+    onChange("customerName", name);
+    onChange("customerId", id);
+    onChange("customerIco", ico);
+  };
+
+  return (
+    <div className="grid gap-3">
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-semibold text-kv-navy">Zákazník</span>
+        {getToken ? (
+          <CustomerAutocomplete
+            value={header.customerName}
+            onChange={(val) => onChange("customerName", val)}
+            onSelect={handleCustomerSelect}
+            getToken={getToken}
+            placeholder="Firma s.r.o."
+          />
+        ) : (
+          <input
+            type="text"
+            value={header.customerName}
+            onChange={(e) => onChange("customerName", e.target.value)}
+            placeholder="Firma s.r.o."
+            className={INPUT_CLASS}
+          />
+        )}
+      </label>
+      <div className="grid gap-3 grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold text-kv-navy">ID zákazníka</span>
+          <input
+            type="text"
+            value={header.customerId}
+            onChange={(e) => onChange("customerId", e.target.value)}
+            placeholder="123456"
+            className={INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold text-kv-navy">IČ</span>
+          <input
+            type="text"
+            value={header.customerIco}
+            onChange={(e) => onChange("customerIco", e.target.value)}
+            placeholder="12345678"
+            className={INPUT_CLASS}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+export function OfferHeaderForm({ header, onChange, forceExpanded = false, getToken }: OfferHeaderFormProps) {
   const [expanded, setExpanded] = useState(false);
 
   const update = (key: keyof OfferHeader, value: string) => {
@@ -101,32 +154,13 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
             <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
                 <div className="grid gap-3">
+                  <CustomerSection header={header} onChange={update} getToken={getToken} />
                   <TextField
-                    label="Zákazník"
-                    value={header.customerName}
-                    placeholder="Firma s.r.o."
-                    onChange={(value) => update("customerName", value)}
+                    label="Zakázka"
+                    value={header.offerName}
+                    placeholder="RD Kocourkov"
+                    onChange={(value) => update("offerName", value)}
                   />
-                  <div className="grid gap-3 md:grid-cols-[120px_140px_minmax(0,1fr)]">
-                    <TextField
-                      label="ID zákazníka"
-                      value={header.customerId}
-                      placeholder="123456"
-                      onChange={(value) => update("customerId", value)}
-                    />
-                    <TextField
-                      label="IČ"
-                      value={header.customerIco}
-                      placeholder="12345678"
-                      onChange={(value) => update("customerIco", value)}
-                    />
-                    <TextField
-                      label="Zakázka"
-                      value={header.offerName}
-                      placeholder="RD Kocourkov"
-                      onChange={(value) => update("offerName", value)}
-                    />
-                  </div>
                 </div>
               </section>
 
@@ -170,28 +204,7 @@ export function OfferHeaderForm({ header, onChange, forceExpanded = false }: Off
           <>
             <div className="grid gap-4 xl:grid-cols-[1.3fr_1.2fr_1fr]">
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">
-                <div className="grid gap-3">
-                  <TextField
-                    label="Zákazník"
-                    value={header.customerName}
-                    placeholder="Firma s.r.o."
-                    onChange={(value) => update("customerName", value)}
-                  />
-                  <div className="grid gap-3 grid-cols-2">
-                    <TextField
-                      label="ID zákazníka"
-                      value={header.customerId}
-                      placeholder="123456"
-                      onChange={(value) => update("customerId", value)}
-                    />
-                    <TextField
-                      label="IČ"
-                      value={header.customerIco}
-                      placeholder="12345678"
-                      onChange={(value) => update("customerIco", value)}
-                    />
-                  </div>
-                </div>
+                <CustomerSection header={header} onChange={update} getToken={getToken} />
               </section>
 
               <section className="rounded-xl border border-kv-gray-200 bg-kv-gray-50/70 p-4">

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/Header";
+import { CustomerAutocomplete } from "@/components/CustomerAutocomplete";
 import { createClient } from "@/lib/supabase/client";
 import { listOffers, createOffer, deleteOffer, type OfferSummary } from "@/lib/api";
 
@@ -40,6 +41,7 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newCustomerId, setNewCustomerId] = useState("");
+  const [newCustomerIco, setNewCustomerIco] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -115,11 +117,13 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
       const token = await getToken();
       const header: Record<string, string> = {};
       if (newCustomerId.trim()) header.customerId = newCustomerId.trim();
+      if (newCustomerIco.trim()) header.customerIco = newCustomerIco.trim();
       if (newCustomerName.trim()) header.customerName = newCustomerName.trim();
       const offer = await createOffer(newTitle.trim(), token, Object.keys(header).length > 0 ? header : undefined);
       setShowCreateModal(false);
       setNewTitle("");
       setNewCustomerId("");
+      setNewCustomerIco("");
       setNewCustomerName("");
       router.push(`/offers/${offer.id}`);
     } catch {
@@ -127,7 +131,7 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
     } finally {
       setCreating(false);
     }
-  }, [newTitle, newCustomerId, newCustomerName, creating, getToken, router]);
+  }, [newTitle, newCustomerId, newCustomerIco, newCustomerName, creating, getToken, router]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteId || deleting) return;
@@ -313,33 +317,43 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                   className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-kv-navy">ID zákazníka</span>
-                  <input
-                    type="text"
-                    value={newCustomerId}
-                    onChange={(e) => setNewCustomerId(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleCreate();
-                    }}
-                    placeholder="123456"
-                    className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
-                  />
-                </label>
+              <div className="grid gap-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-kv-navy">Zákazník</span>
-                  <input
-                    type="text"
+                  <CustomerAutocomplete
                     value={newCustomerName}
-                    onChange={(e) => setNewCustomerName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleCreate();
+                    onChange={(val) => setNewCustomerName(val)}
+                    onSelect={(name, id, ico) => {
+                      setNewCustomerName(name);
+                      setNewCustomerId(id);
+                      setNewCustomerIco(ico);
                     }}
-                    placeholder="Firma s.r.o."
-                    className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-4 py-3 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                    getToken={getToken}
+                    placeholder="Hledat zákazníka…"
                   />
                 </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-kv-navy">ID zákazníka</span>
+                    <input
+                      type="text"
+                      value={newCustomerId}
+                      onChange={(e) => setNewCustomerId(e.target.value)}
+                      placeholder="123456"
+                      className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-3 py-2 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-kv-navy">IČ</span>
+                    <input
+                      type="text"
+                      value={newCustomerIco}
+                      onChange={(e) => setNewCustomerIco(e.target.value)}
+                      placeholder="12345678"
+                      className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 px-3 py-2 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-400 focus:border-kv-red/30 focus:bg-white focus:ring-2 focus:ring-kv-red/10"
+                    />
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -350,6 +364,7 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
                   setShowCreateModal(false);
                   setNewTitle("");
                   setNewCustomerId("");
+                  setNewCustomerIco("");
                   setNewCustomerName("");
                 }}
                 className="px-5 py-2.5 bg-white border border-kv-gray-200 text-kv-gray-600 rounded-lg text-xs font-bold uppercase tracking-wider transition hover:bg-kv-gray-100"

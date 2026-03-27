@@ -15,6 +15,20 @@ COPY --from=builder /app/.npmrc* ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 
+# Sync scripts (spawned by cron) — tsx must be installed (it's in dependencies)
+COPY scripts/package*.json ./scripts/
+RUN cd scripts && npm ci
+COPY scripts/ ./scripts/
+
+# Lookup CSVs for category/status resolution
+COPY data-model/sync/new_name_of_category.csv ./scripts/data-model/sync/new_name_of_category.csv
+COPY data-model/sync/new_status_type.csv ./scripts/data-model/sync/new_status_type.csv
+
+# Sync data dir — ephemeral temp storage, no volume needed
+RUN mkdir -p /tmp/sync
+
 ENV NODE_ENV=production
+ENV SYNC_SCRIPTS_DIR=/app/scripts
+ENV SYNC_DATA_DIR=/tmp/sync
 
 CMD ["node", "dist/index.js"]

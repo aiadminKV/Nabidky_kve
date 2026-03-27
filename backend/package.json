@@ -20,6 +20,7 @@
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "hono": "^4.7.0",
+    "node-cron": "^4.2.1",
     "openai": "^4.85.0",
     "pg": "^8.19.0",
     "pg-copy-streams": "^7.0.0",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
+    "@types/node-cron": "^3.0.11",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

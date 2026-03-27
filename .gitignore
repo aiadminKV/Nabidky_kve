@@ -40,3 +40,8 @@ coverage/
 *.csv
 *.ndjson
 *.jsonl
+*.bak
+
+# Large sync data files
+data-model/sync/*.csv
+data-model/sync/*.bak

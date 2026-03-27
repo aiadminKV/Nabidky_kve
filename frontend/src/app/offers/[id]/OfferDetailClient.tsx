@@ -1509,7 +1509,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
                 </svg>
               </button>
             </div>
-            <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded />
+            <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded getToken={getToken} />
           </div>
         </div>
       )}

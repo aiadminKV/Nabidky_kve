@@ -576,6 +576,29 @@ export async function getProductStock(
   return res.json();
 }
 
+// ── Customers ────────────────────────────────────────────
+
+export interface CustomerSuggestion {
+  source_kunnr: string;
+  ico: string | null;
+  name: string;
+  address: string | null;
+}
+
+export async function searchCustomers(
+  q: string,
+  token: string,
+  limit = 8,
+): Promise<CustomerSuggestion[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const res = await fetch(`${BACKEND_URL}/customers/search?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.customers ?? [];
+}
+
 // ── Manufacturers ────────────────────────────────────────
 
 export async function getManufacturers(token: string): Promise<string[]> {

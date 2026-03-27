@@ -747,7 +747,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
 
         {/* Right panel – Context-dependent */}
         <div className="flex flex-1 flex-col bg-white">
-          <OfferHeaderForm header={offerHeader} onChange={setOfferHeader} />
+          <OfferHeaderForm header={offerHeader} onChange={setOfferHeader} getToken={getToken} />
           {renderRightPanel()}
         </div>
       </div>
