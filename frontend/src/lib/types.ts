@@ -1,3 +1,13 @@
+/** Generate a stable 8-char hex item ID (unique within an offer) */
+export function generateItemId(): string {
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    const bytes = new Uint8Array(4);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+}
+
 /** Match type returned by the search engine */
 export type MatchType = "match" | "uncertain" | "multiple" | "alternative" | "not_found";
 
@@ -81,6 +91,7 @@ export interface GroupContext {
 
 /** A matched offer item after search */
 export interface OfferItem {
+  itemId: string;
   position: number;
   originalName: string;
   unit: string | null;
@@ -96,6 +107,8 @@ export interface OfferItem {
   confirmed?: boolean;
   reviewStatus?: ReviewStatus;
   extraColumns?: Record<string, string>;
+  exactLookupAttempted?: boolean;
+  exactLookupFound?: boolean;
 }
 
 /** SSE event from backend */
@@ -106,7 +119,8 @@ export interface SSEEvent {
 
 /** Compact offer item sent to the offer agent for context */
 export interface OfferItemSummary {
-  position: number;
+  itemId: string;
+  displayNumber: number;
   name: string;
   sku: string | null;
   manufacturer: string | null;
@@ -118,9 +132,9 @@ export interface OfferItemSummary {
 export type OfferAction =
   | { type: "parse_items"; items: Array<{ name: string; quantity: number | null }> }
   | { type: "process_items"; items: Array<{ name: string; quantity: number | null; unit: string | null }> }
-  | { type: "add_item"; name: string; quantity: number | null; selectedSku: string | null; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number; reasoning?: string }
-  | { type: "replace_product"; position: number; selectedSku: string; reasoning: string; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number }
-  | { type: "remove_item"; position: number }
+  | { type: "add_item"; name: string; quantity: number | null; selectedSku: string | null; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number; reasoning?: string; afterItemId?: string | null }
+  | { type: "replace_product"; itemId: string; selectedSku: string; reasoning: string; product?: Product | null; candidates?: Product[]; matchType?: MatchType; confidence?: number }
+  | { type: "remove_item"; itemId: string }
   | { type: "update_header"; fields: Partial<OfferHeader> };
 
 /** Debug log entry from agent execution */

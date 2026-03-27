@@ -107,6 +107,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
     .from("offer_items")
     .select(`
       id,
+      item_id,
       position,
       original_name,
       unit,
@@ -133,6 +134,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
   }
 
   const offerItems = (items ?? []).map((item) => ({
+    itemId: item.item_id ?? null,
     position: item.position,
     originalName: item.original_name,
     unit: item.unit,
@@ -274,6 +276,7 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
       }
       return {
         offer_id: offerId,
+        item_id: item.itemId ?? null,
         position: item.position,
         original_name: item.originalName,
         unit: item.unit ?? null,
@@ -308,6 +311,7 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
 });
 
 interface OfferItemInput {
+  itemId?: string | null;
   position: number;
   originalName: string;
   unit?: string | null;

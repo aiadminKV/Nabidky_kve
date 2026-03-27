@@ -3,6 +3,34 @@
 import { useCallback, useMemo } from "react";
 import type { ParsedItem } from "@/lib/types";
 
+// Values matching actual catalog units (KS, M, BAL, KG, SET, PÁR, ROL)
+const UNIT_OPTIONS = ["ks", "m", "bal", "kg", "set", "pár", "rol"] as const;
+
+function UnitCell({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const isKnown = value == null || UNIT_OPTIONS.includes(value as typeof UNIT_OPTIONS[number]);
+  return (
+    <div className="relative">
+      <select
+        value={isKnown ? (value ?? "") : "__custom__"}
+        onChange={(e) => {
+          if (e.target.value === "__custom__") return;
+          onChange(e.target.value || null);
+        }}
+        className="w-full appearance-none rounded-lg border border-transparent bg-transparent px-2 py-1.5 pr-6 text-sm text-kv-gray-600 outline-none transition-colors hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
+      >
+        <option value="">—</option>
+        {UNIT_OPTIONS.map((u) => (
+          <option key={u} value={u}>{u}</option>
+        ))}
+        {!isKnown && <option value="__custom__">{value}</option>}
+      </select>
+      <svg className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-kv-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+      </svg>
+    </div>
+  );
+}
+
 interface ParsedItemsTableProps {
   items: ParsedItem[];
   onItemsChange: (items: ParsedItem[]) => void;
@@ -159,11 +187,9 @@ export function ParsedItemsTable({
                   />
                 </td>
                 <td className="px-4 py-1.5">
-                  <input
-                    value={item.unit ?? ""}
-                    onChange={(e) => updateItem(item.id, "unit", e.target.value || null)}
-                    placeholder="ks"
-                    className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm text-kv-gray-600 outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
+                  <UnitCell
+                    value={item.unit}
+                    onChange={(v) => updateItem(item.id, "unit", v)}
                   />
                 </td>
                 <td className="px-4 py-1.5">

@@ -142,6 +142,8 @@ agent.post("/agent/search", authMiddleware, async (c) => {
             priceNote: null,
             reformulatedQuery: "",
             pipelineMs: 0,
+            exactLookupAttempted: false,
+            exactLookupFound: false,
           };
           matchResults.push(failResult);
           await stream.write(sseEvent("item_matched", failResult));
@@ -286,6 +288,8 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
             priceNote: null,
             reformulatedQuery: "",
             pipelineMs: 0,
+            exactLookupAttempted: false,
+            exactLookupFound: false,
           };
           matchResults.push(failResult);
           await stream.write(sseEvent("item_matched", failResult));
@@ -340,7 +344,8 @@ agent.post("/agent/search-plan", authMiddleware, async (c) => {
 });
 
 interface OfferItemSummary {
-  position: number;
+  itemId: string;
+  displayNumber: number;
   name: string;
   sku: string | null;
   manufacturer: string | null;
@@ -351,11 +356,11 @@ interface OfferItemSummary {
 function buildOfferContext(items: OfferItemSummary[]): string {
   if (items.length === 0) return "Nabídka je prázdná – žádné položky.";
 
-  const header = "Pozice | Název | Výrobce | SKU | Stav";
-  const divider = "---|---|---|---|---";
+  const header = "# | itemId | Název | Výrobce | SKU | Stav";
+  const divider = "---|---|---|---|---|---";
   const rows = items.map(
     (i) =>
-      `${i.position} | ${i.name} | ${i.manufacturer ?? "–"} | ${i.sku ?? "–"} | ${i.matchType}`,
+      `${i.displayNumber} | ${i.itemId} | ${i.name} | ${i.manufacturer ?? "–"} | ${i.sku ?? "–"} | ${i.matchType}`,
   );
   return `Aktuální nabídka (${items.length} položek):\n${header}\n${divider}\n${rows.join("\n")}`;
 }

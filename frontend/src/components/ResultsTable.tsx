@@ -1,17 +1,134 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover } from "./ProductInfoPopover";
 import { StockBadge } from "./StockBadge";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+const MATCH_TYPE_LABELS: Record<string, string> = {
+  match: "Přesná shoda",
+  uncertain: "Nejistá shoda",
+  multiple: "Více shod",
+  alternative: "Alternativa",
+  not_found: "Nenalezeno",
+  processing: "Zpracovávám…",
+};
+
+function ReasoningPopover({ item }: { item: OfferItem }) {
+  const [open, setOpen] = useState(false);
+  if (!item.reasoning && !item.reformulatedQuery) return null;
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        title="Zobrazit rozhodování AI"
+        className={`flex h-7 w-7 items-center justify-center rounded-lg transition-all ${open ? "bg-kv-navy/10 text-kv-navy" : "text-kv-gray-300 hover:bg-kv-navy/10 hover:text-kv-navy"}`}
+      >
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-8 z-40 w-80 rounded-xl border border-kv-gray-200 bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center gap-2">
+              <svg className="h-4 w-4 text-kv-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+              </svg>
+              <span className="text-xs font-semibold text-kv-navy">Rozhodování AI</span>
+            </div>
+            <div className="space-y-2 text-xs">
+              <div className="flex gap-2">
+                <span className="w-24 shrink-0 text-kv-gray-400">Shoda</span>
+                <span className="font-medium text-kv-dark">{MATCH_TYPE_LABELS[item.matchType] ?? item.matchType} ({item.confidence}%)</span>
+              </div>
+              {item.pipelineMs != null && (
+                <div className="flex gap-2">
+                  <span className="w-24 shrink-0 text-kv-gray-400">Čas</span>
+                  <span className="text-kv-gray-600">{(item.pipelineMs / 1000).toFixed(1)} s</span>
+                </div>
+              )}
+              {item.reformulatedQuery && (
+                <div className="flex gap-2">
+                  <span className="w-24 shrink-0 text-kv-gray-400">Dotaz AI</span>
+                  <span className="text-kv-gray-600 break-all">{item.reformulatedQuery}</span>
+                </div>
+              )}
+              {item.reasoning && (
+                <div className="mt-2 rounded-lg bg-kv-gray-50 p-2.5 text-kv-gray-700 leading-relaxed">
+                  {item.reasoning}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CopySkuButton({ sku }: { sku: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(sku).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [sku]);
+  return (
+    <button
+      onClick={copy}
+      title={copied ? "Zkopírováno!" : "Kopírovat SKU"}
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-kv-gray-300 transition-all hover:bg-kv-gray-100 hover:text-kv-navy"
+    >
+      {copied ? (
+        <svg className="h-3 w-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+        </svg>
+      ) : (
+        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 const UNIT_GROUPS: Record<string, string> = {
-  ks: "ks", kus: "ks", kusu: "ks", kusů: "ks", kusov: "ks", pcs: "ks",
-  m: "m", metr: "m", metry: "m", metrů: "m", met: "m",
-  bal: "bal", balení: "bal", baleni: "bal", pack: "bal",
+  // KS — kusy (dominantní v katalogu)
+  ks: "ks", kus: "ks", kusu: "ks", kusů: "ks", kusov: "ks", pcs: "ks", piece: "ks",
+  // M — metry (kabely, vodiče)
+  m: "m", metr: "m", metry: "m", metrů: "m", met: "m", bm: "m",
+  // BAL — balení
+  bal: "bal", balení: "bal", baleni: "bal", pack: "bal", pkg: "bal",
+  // KG — kilogramy
   kg: "kg", kilogram: "kg",
-  sada: "sada", set: "sada", komplet: "sada",
+  // SET/SADA
+  set: "set", sada: "set", komplet: "set",
+  // PÁR
+  pár: "pár", par: "pár", pair: "pár",
+  // ROL — role (katalogová hodnota pro kabely v rolích/kotoučích)
+  rol: "rol", role: "rol", rola: "rol", roll: "rol", kruh: "rol", kotouč: "rol",
+  // BUBEN — buben je v názvu produktu, ne jako MJ (MJ bývá KS nebo M)
+  buben: "ks", drum: "ks",
 };
 
 function normalizeUnit(u: string): string {
@@ -27,9 +144,108 @@ function unitMismatchLabel(demandUnit: string, productUnit: string): string {
   return `Poptávka: ${demandUnit} → Produkt: ${productUnit}`;
 }
 
+interface SortableRowProps {
+  item: OfferItem;
+  isCurrentlySearching: boolean;
+  justChanged: boolean;
+  isReviewed: boolean;
+  isDragDisabled: boolean;
+  onInsertAt?: (afterPosition: number) => void;
+  isLastRow: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}
+
+function SortableRow({
+  item,
+  isCurrentlySearching,
+  justChanged,
+  isReviewed,
+  isDragDisabled,
+  onInsertAt,
+  isLastRow,
+  onClick,
+  children,
+}: SortableRowProps) {
+  const [showInsert, setShowInsert] = useState(false);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.itemId,
+    disabled: isDragDisabled,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: "relative" as const,
+  };
+
+  return (
+    <>
+      <tr
+        ref={setNodeRef}
+        style={style}
+        onClick={onClick}
+        onMouseEnter={() => onInsertAt && setShowInsert(true)}
+        onMouseLeave={() => setShowInsert(false)}
+        className={`group/row transition-all duration-500 ${
+          isCurrentlySearching
+            ? "bg-kv-gray-50 animate-pulse-subtle"
+            : justChanged
+              ? "bg-green-50/60"
+              : isReviewed
+                ? "bg-emerald-50/40 cursor-pointer hover:bg-emerald-50/70 border-l-2 border-l-emerald-400"
+                : "bg-amber-50/50 cursor-pointer hover:bg-amber-100/60 border-l-2 border-l-amber-400"
+        }`}
+      >
+        {/* Drag handle as first cell */}
+        <td className="w-6 pl-1 pr-0 py-2.5">
+          {!isDragDisabled && (
+            <button
+              {...attributes}
+              {...listeners}
+              onClick={(e) => e.stopPropagation()}
+              className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-kv-gray-200 opacity-0 transition-all group-hover/row:opacity-100 hover:text-kv-gray-400 active:cursor-grabbing"
+              title="Přetáhnout"
+            >
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z" />
+              </svg>
+            </button>
+          )}
+        </td>
+        {children}
+      </tr>
+      {/* Insert between rows */}
+      {onInsertAt && (showInsert || isLastRow) && (
+        <tr
+          onMouseEnter={() => setShowInsert(true)}
+          onMouseLeave={() => setShowInsert(false)}
+          className="h-0"
+        >
+          <td colSpan={99} className="p-0">
+            <div className={`flex items-center transition-all duration-150 ${showInsert ? "h-5 opacity-100" : "h-0 opacity-0"}`}>
+              <div className="flex-1 border-t border-dashed border-kv-gray-200" />
+              <button
+                onClick={(e) => { e.stopPropagation(); onInsertAt(item.position); }}
+                className="mx-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-kv-gray-300 bg-white text-kv-gray-400 hover:border-kv-navy hover:text-kv-navy"
+                title="Přidat položku zde"
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              </button>
+              <div className="flex-1 border-t border-dashed border-kv-gray-200" />
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 interface ResultsTableProps {
   items: OfferItem[];
-  searchingSet: Set<number>;
+  searchingSet: Set<string>;
   changedPositions?: Set<number>;
   onItemClick: (item: OfferItem) => void;
   onExport: () => void;
@@ -37,8 +253,10 @@ interface ResultsTableProps {
   onProcessNotFound: () => void;
   onProcessAgain?: () => void;
   onAddItem?: () => void;
-  onDeleteItem?: (position: number) => void;
+  onDeleteItem?: (itemId: string) => void;
   onSearchItem?: (item: OfferItem) => void;
+  onReorder?: (reorderedItems: OfferItem[]) => void;
+  onInsertAt?: (afterPosition: number) => void;
   isSearchingSemantic: boolean;
   isProcessing?: boolean;
   token?: string;
@@ -56,19 +274,37 @@ export function ResultsTable({
   onAddItem,
   onDeleteItem,
   onSearchItem,
+  onReorder,
+  onInsertAt,
   isSearchingSemantic,
   isProcessing = false,
   token = "",
 }: ResultsTableProps) {
   const [showResetModal, setShowResetModal] = useState(false);
   const [showReprocessModal, setShowReprocessModal] = useState(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !onReorder) return;
+    const oldIndex = items.findIndex((i) => i.itemId === active.id);
+    const newIndex = items.findIndex((i) => i.itemId === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(items, oldIndex, newIndex).map((item, idx) => ({
+      ...item,
+      position: idx,
+    }));
+    onReorder(reordered);
+  }, [items, onReorder]);
   const neutralButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-kv-gray-200 bg-white px-4 text-xs font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50 disabled:opacity-40 disabled:cursor-not-allowed";
   const navyButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-kv-navy/20 bg-kv-navy/5 px-4 text-xs font-medium text-kv-navy transition-colors hover:bg-kv-navy/10 disabled:opacity-40 disabled:cursor-not-allowed";
   const amberButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed";
   const primaryButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl bg-kv-red px-4.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed";
 
   const matchedCount = items.filter((i) => i.matchType !== "not_found" || i.confirmed).length;
-  const doneCount = items.filter((i) => !searchingSet.has(i.position)).length;
+  const doneCount = items.filter((i) => !searchingSet.has(i.itemId)).length;
   const isSearching = searchingSet.size > 0;
   const notFoundCount = items.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
   const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed").length;
@@ -270,6 +506,7 @@ export function ResultsTable({
         <table className="w-full">
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
+              <th className="w-6 pl-1 pr-0" />
               <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 w-10">#</th>
               <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Poptávka</th>
               <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 w-20">Množ.</th>
@@ -283,24 +520,24 @@ export function ResultsTable({
               <th className="px-4 py-2.5 text-center text-xs font-medium text-kv-gray-400 w-20">Akce</th>
             </tr>
           </thead>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={items.map((i) => i.itemId)} strategy={verticalListSortingStrategy}>
           <tbody className="divide-y divide-kv-gray-100">
-            {items.map((item) => {
-              const isCurrentlySearching = searchingSet.has(item.position);
+            {items.map((item, idx) => {
+              const isCurrentlySearching = searchingSet.has(item.itemId);
               const justChanged = changedPositions?.has(item.position) ?? false;
               const isReviewed = item.reviewStatus === "reviewed";
               return (
-                <tr
-                  key={item.position}
+                <SortableRow
+                  key={item.itemId}
+                  item={item}
+                  isCurrentlySearching={isCurrentlySearching}
+                  justChanged={justChanged}
+                  isReviewed={isReviewed}
+                  isDragDisabled={isProcessing || isCurrentlySearching}
+                  onInsertAt={onInsertAt}
+                  isLastRow={idx === items.length - 1}
                   onClick={() => !isCurrentlySearching && onItemClick(item)}
-                  className={`transition-all duration-500 ${
-                    isCurrentlySearching
-                      ? "bg-kv-gray-50 animate-pulse-subtle"
-                      : justChanged
-                        ? "bg-green-50/60"
-                        : isReviewed
-                          ? "bg-emerald-50/40 cursor-pointer hover:bg-emerald-50/70 border-l-2 border-l-emerald-400"
-                          : "bg-amber-50/50 cursor-pointer hover:bg-amber-100/60 border-l-2 border-l-amber-400"
-                  }`}
                 >
                   <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400">{item.position + 1}</td>
                   <td className="px-4 py-2.5 text-sm text-kv-dark">
@@ -349,15 +586,13 @@ export function ResultsTable({
                             <span className="text-xs text-kv-gray-400">{item.product.manufacturer}</span>
                           )}
                           {item.product.sku && (
-                            <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
+                            <span className="flex items-center gap-0.5">
+                              <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
+                              <CopySkuButton sku={item.product.sku} />
+                            </span>
                           )}
                           <StockBadge product={item.product} token={token} />
                         </div>
-                      )}
-                      {item.reasoning && !isCurrentlySearching && (
-                        <p className="mt-0.5 text-[11px] text-kv-gray-400 truncate max-w-[290px]" title={item.reasoning}>
-                          {item.reasoning}
-                        </p>
                       )}
                       {item.priceNote && !isCurrentlySearching && (
                         <div className="mt-1 flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
@@ -365,6 +600,15 @@ export function ResultsTable({
                             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
                           </svg>
                           <span className="truncate">{item.priceNote}</span>
+                        </div>
+                      )}
+                      {!isCurrentlySearching && item.exactLookupAttempted && !item.exactLookupFound && item.matchType === "not_found" && (
+                        <div className="mt-1 flex items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-[11px] text-red-600 border border-red-200">
+                          <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
+                          </svg>
+                          <span>EAN/kód nenalezen v katalogu</span>
                         </div>
                       )}
                     </div>
@@ -377,6 +621,9 @@ export function ResultsTable({
                   </td>
                   <td className="px-4 py-2.5 text-center">
                     <div className="flex items-center justify-center gap-1">
+                      {!isCurrentlySearching && (
+                        <ReasoningPopover item={item} />
+                      )}
                       {!isCurrentlySearching && onSearchItem && (
                         <button
                           onClick={(e) => {
@@ -395,7 +642,7 @@ export function ResultsTable({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onDeleteItem(item.position);
+                            onDeleteItem(item.itemId);
                           }}
                           title="Odebrat položku"
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-kv-gray-300 transition-all hover:bg-kv-red-light hover:text-kv-red"
@@ -407,10 +654,12 @@ export function ResultsTable({
                       )}
                     </div>
                   </td>
-                </tr>
+                </SortableRow>
               );
             })}
           </tbody>
+            </SortableContext>
+          </DndContext>
         </table>
       </div>
       </div>

@@ -310,6 +310,7 @@ export interface ChatMessageDTO {
 }
 
 export interface OfferItemDTO {
+  itemId: string | null;
   position: number;
   originalName: string;
   unit: string | null;
@@ -425,6 +426,7 @@ export async function saveOfferMessages(
 }
 
 export interface SaveOfferItemInput {
+  itemId?: string | null;
   position: number;
   originalName: string;
   unit?: string | null;

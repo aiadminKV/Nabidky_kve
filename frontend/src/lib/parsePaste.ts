@@ -3,6 +3,29 @@ import type { ParsedItem } from "./types";
 let counter = 0;
 
 /**
+ * Parse Czech number notation:
+ *   "1.000"   → 1000  (dot before exactly 3 digits = thousands separator)
+ *   "1.000,5" → 1000.5
+ *   "1,5"     → 1.5   (comma = decimal separator)
+ *   "2.5"     → 2.5   (dot + fewer than 3 digits = decimal)
+ *   "1.000.000" → 1000000
+ */
+export function parseNumberCzech(s: string): number {
+  const trimmed = s.trim();
+  // If contains comma → comma is decimal separator, dots are thousands
+  if (trimmed.includes(",")) {
+    const normalized = trimmed.replace(/\./g, "").replace(",", ".");
+    return parseFloat(normalized);
+  }
+  // No comma — dot before exactly 3 digits = thousands separator
+  if (/\.\d{3}$/.test(trimmed) || /\.\d{3}\./.test(trimmed)) {
+    return parseFloat(trimmed.replace(/\./g, ""));
+  }
+  // Otherwise dot = decimal separator
+  return parseFloat(trimmed);
+}
+
+/**
  * Parse pasted text into structured items.
  *
  * Expected tab-separated format (columns in order):
@@ -31,10 +54,10 @@ export function parsePastedText(raw: string): ParsedItem[] {
 
     if (cols.length >= 3) {
       unit = cols[1] || null;
-      const num = parseFloat(cols[2].replace(",", "."));
+      const num = parseNumberCzech(cols[2]);
       quantity = isNaN(num) ? null : num;
     } else if (cols.length === 2) {
-      const num = parseFloat(cols[1].replace(",", "."));
+      const num = parseNumberCzech(cols[1]);
       if (!isNaN(num)) {
         quantity = num;
       } else {

@@ -58,6 +58,8 @@ export interface PipelineResult {
   priceNote: string | null;
   reformulatedQuery: string;
   pipelineMs: number;
+  exactLookupAttempted: boolean;
+  exactLookupFound: boolean;
 }
 
 export interface GroupContext {
@@ -307,6 +309,10 @@ const REFORM_PROMPT = `Přeformuluj název elektrotechnického produktu do formy
 - "chránič proudový 1+N pólový 16A typ B" → "chranic PFGM-16/2/003-B proudový chránič 16A 2P typ B"
 - "Datový kabel UTP CAT6 LSOH" → "KABEL SXKD-6-UTP-LSOH datový kabel UTP kategorie 6 Cat6 bezhalogenový"
 - "kabel instalační ... (CYKY) 3x1,5mm2" → "KABEL 1-CYKY-J 3x1,5 CYKY kabel instalační 3×1,5"
+- "CYSY 361" → "KABEL 1-CYSY 3×6+1 ohebný kabel 6mm² 3 žíly CYSY 3G6 H05VV-F"
+- "CYSY 3G6" → "KABEL 1-CYSY 3×6 ohebný kabel 6mm² s ochranným vodičem CYSY 3G6"
+- "CYSY 3×1,5" → "KABEL 1-CYSY 3x1,5 měkký ohebný kabel CYSY H05VV-F"
+- "CYSY 3x2,5" → "KABEL 1-CYSY 3x2,5 měkký ohebný kabel CYSY H05VV-F"
 - "Vodič CY 6" → "VODIC H07V-U 1x6 CY vodič 6mm2 jednodrátový"
 - "Vodič CYA 35" → "VODIC H07V-K 1x35 CYA vodič 35mm2 lanovaný"
 - "H07V-K 6mm2" → "VODIC H07V-K 1x6 vodič lanovaný 6mm2 CYA"
@@ -314,8 +320,16 @@ const REFORM_PROMPT = `Přeformuluj název elektrotechnického produktu do formy
 - "rozvodnice nástěnná 72 modulů" → "ROZVODNICE rozváděčová skříň nástěnná 72 modulů IP41"
 - "trubka ohebná pr. 20mm" → "TRUBKA ohebná elektroinstalační ohebná 20mm PVC"
 
+## KABELY — zkrácené zápisy průřezů
+Expanduj zkrácené zápisy (nejčastěji u CYSY, CYKY, CXKH):
+- "361" → "3×6+1" = 3 žíly 6mm² + 1 žíla zemní 1mm² (přidej obě varianty: 3G6, 3x6+1)
+- "3G6" → 3 žíly 6mm² s ochranným vodičem (= 3×6+1)
+- "324" → "3×2,5+4" nebo "3×2,5+4×2,5"
+- "2×1,5" a "2G1,5" jsou ekvivalenty pro 2-žilový kabel 1,5mm²
+CYSY = ohebný/měkký silový kabel (H05VV-F), prodává se v rolích nebo bubnech.
+
 ## DŮLEŽITÉ
-- V katalogu mají kabely prefix "1-" (např. 1-CYKY-J, 1-CXKH-R-J)
+- V katalogu mají kabely prefix "1-" (např. 1-CYKY-J, 1-CYSY, 1-CXKH-R-J)
 - V katalogu se vodiče značí H07V-U (drátový=CY) a H07V-K (lanovaný=CYA)
 - Jističe se v katalogu značí jako PL6-BAMP/POLES nebo podobně
 - Vždy přidej jak katalogový kód, tak popisný text pro lepší vyhledávání
@@ -433,8 +447,23 @@ Dostaneš originální název z poptávky a seznam raw kandidátů z vyhledává
 - CXKH-R ≠ CXKH-V (kulatý vs plochý)
 - -J ≠ -O (s/bez ochranného vodiče)
 
-## Měrné jednotky
-U kabelů/vodičů v m: preferuj největší kruh jehož násobek = poptávané množství (200m → 2×100m > 4×50m). Pokud žádný → buben. Nikdy nevolej not_found jen kvůli MJ.
+## Měrné jednotky — kabely/vodiče (KRITICKÉ PRAVIDLO)
+Pokud poptávka je v **metrech** (demandUnit = "m") NEBO název obsahuje metráž (např. "200m CYKY"):
+
+**Povolené katalogové položky:**
+- Název obsahuje konkrétní délku balení: "100m", "50m", "200m", "500m" apod.
+- Název obsahuje "BUBEN" (nebo "buben")
+- Katalogová jednotka (unit) = "m" (prodáváno po metrech)
+
+**ZAKÁZANÉ — NIKDY nezařazuj do shortlistu:**
+- Položky kde název NEOBSAHUJE délku ani BUBEN a zároveň unit ≠ "m"
+- Položky s unit = "ks" bez délky v názvu — "ks" kabelu bez metráže nedává smysl pro metrový odběr
+
+**Výběr balení (po splnění výše):**
+- Preferuj největší kruh jehož násobek = poptávané množství (200m → 2×100m > 4×50m)
+- Pokud žádný kruh netvoří přesný násobek → vyber BUBEN
+- Pokud katalog prodává po metrech (unit = "m") → také platný výběr
+- Nikdy nevolej not_found jen kvůli MJ — buben je vždy záchrana
 
 ## matchScore
 - 90-100: PŘESNÁ shoda typu + všech klíčových parametrů
@@ -908,6 +937,8 @@ export async function searchPipelineForItem(
       priceNote: selectorResult.priceNote,
       reformulatedQuery: reformulated,
       pipelineMs,
+      exactLookupAttempted: true,
+      exactLookupFound: exactResults.length > 0,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Pipeline failed";
@@ -926,6 +957,8 @@ export async function searchPipelineForItem(
       priceNote: null,
       reformulatedQuery: "",
       pipelineMs: Date.now() - t0,
+      exactLookupAttempted: false,
+      exactLookupFound: false,
     };
   }
 }

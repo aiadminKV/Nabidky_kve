@@ -12,18 +12,19 @@ import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx } from "@/lib/api";
-import type {
-  ChatMessage,
-  DebugEntry,
-  FileAttachment,
-  OfferAction,
-  OfferHeader,
-  OfferItem,
-  OfferItemSummary,
-  OfferPhase,
-  ParsedItem,
-  Product,
-  ToolCallStatus,
+import {
+  generateItemId,
+  type ChatMessage,
+  type DebugEntry,
+  type FileAttachment,
+  type OfferAction,
+  type OfferHeader,
+  type OfferItem,
+  type OfferItemSummary,
+  type OfferPhase,
+  type ParsedItem,
+  type Product,
+  type ToolCallStatus,
 } from "@/lib/types";
 
 interface DashboardClientProps {
@@ -36,7 +37,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [parsedItems, setParsedItems] = useState<ParsedItem[]>([]);
   const [offerItems, setOfferItems] = useState<OfferItem[]>([]);
-  const [searchingSet, setSearchingSet] = useState<Set<number>>(new Set());
+  const [searchingSet, setSearchingSet] = useState<Set<string>>(new Set());
   const [reviewItem, setReviewItem] = useState<OfferItem | null>(null);
   const [isParsingChat, setIsParsingChat] = useState(false);
   const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
@@ -56,6 +57,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   });
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const batchPositionOffset = useRef(0);
+  const batchItemIds = useRef<string[]>([]);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -122,7 +124,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
 
   const buildOfferSummary = useCallback((): OfferItemSummary[] => {
     return offerItems.map((i) => ({
-      position: i.position,
+      itemId: i.itemId,
+      displayNumber: i.position + 1,
       name: i.originalName,
       sku: i.product?.sku ?? null,
       manufacturer: i.product?.manufacturer ?? null,
@@ -154,23 +157,28 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
             const offset = maxPos + 1;
             batchPositionOffset.current = offset;
-            const newItems: OfferItem[] = action.items.map((item, i) => ({
-              position: offset + i,
-              originalName: item.name,
-              unit: item.unit,
-              quantity: item.quantity,
-              matchType: "not_found" as const,
-              confidence: 0,
-              product: null,
-              candidates: [],
-            }));
+            const ids: string[] = [];
+            const newItems: OfferItem[] = action.items.map((item, i) => {
+              const id = generateItemId();
+              ids.push(id);
+              return {
+                itemId: id,
+                position: offset + i,
+                originalName: item.name,
+                unit: item.unit,
+                quantity: item.quantity,
+                matchType: "not_found" as const,
+                confidence: 0,
+                product: null,
+                candidates: [],
+              };
+            });
+            batchItemIds.current = ids;
             return [...prev, ...newItems];
           });
           setSearchingSet((prev) => {
             const next = new Set(prev);
-            for (let i = 0; i < action.items.length; i++) {
-              next.add(batchPositionOffset.current + i);
-            }
+            for (const id of batchItemIds.current) next.add(id);
             return next;
           });
           if (phase === "idle" || phase === "parsed") setPhase("processing");
@@ -178,12 +186,12 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         }
         case "add_item": {
           const product = action.product ?? null;
+          const afterId = action.afterItemId ?? null;
+          const newItemId = generateItemId();
           setOfferItems((prev) => {
-            const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
-            const newPos = maxPos + 1;
-            flashPosition(newPos);
             const newItem: OfferItem = {
-              position: newPos,
+              itemId: newItemId,
+              position: 0,
               originalName: action.name,
               unit: product?.unit ?? null,
               quantity: action.quantity,
@@ -193,7 +201,18 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
               candidates: (action.candidates ?? []) as Product[],
               reasoning: action.reasoning,
             };
-            return [...prev, newItem];
+            let insertIdx = prev.length;
+            if (afterId) {
+              const idx = prev.findIndex((i) => i.itemId === afterId);
+              if (idx !== -1) insertIdx = idx + 1;
+            }
+            const spliced = [
+              ...prev.slice(0, insertIdx),
+              newItem,
+              ...prev.slice(insertIdx),
+            ].map((item, idx) => ({ ...item, position: idx }));
+            flashPosition(insertIdx);
+            return spliced;
           });
           if (phase === "idle" || phase === "parsed") {
             setPhase("review");
@@ -202,10 +221,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         }
         case "replace_product": {
           const product = action.product ?? null;
-          flashPosition(action.position);
+          const targetItem = offerItems.find((i) => i.itemId === action.itemId);
+          if (targetItem) flashPosition(targetItem.position);
           setOfferItems((prev) =>
             prev.map((i) =>
-              i.position === action.position
+              i.itemId === action.itemId
                 ? {
                     ...i,
                     product,
@@ -222,7 +242,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         }
         case "remove_item": {
           setOfferItems((prev) => {
-            const filtered = prev.filter((i) => i.position !== action.position);
+            const filtered = prev.filter((i) => i.itemId !== action.itemId);
             return filtered.map((item, idx) => ({ ...item, position: idx }));
           });
           break;
@@ -308,24 +328,28 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           } else if (event.type === "action") {
             processAction(event.data as unknown as OfferAction);
           } else if (event.type === "item_searching") {
-            const pos = (event.data.position as number) + batchPositionOffset.current;
-            setSearchingSet((prev) => new Set(prev).add(pos));
+            const pos = event.data.position as number;
+            const id = batchItemIds.current[pos];
+            if (id) setSearchingSet((prev) => new Set(prev).add(id));
           } else if (event.type === "item_matched") {
             const data = event.data as unknown as OfferItem;
-            const adjustedPos = data.position + batchPositionOffset.current;
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(adjustedPos);
-              return next;
-            });
-            flashPosition(adjustedPos);
-            setOfferItems((prev) =>
-              prev.map((item) =>
-                item.position === adjustedPos
-                  ? { ...item, ...data, position: adjustedPos, extraColumns: item.extraColumns }
-                  : item,
-              ),
-            );
+            const id = batchItemIds.current[data.position];
+            if (id) {
+              setSearchingSet((prev) => {
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+              });
+              const adjustedPos = data.position + batchPositionOffset.current;
+              flashPosition(adjustedPos);
+              setOfferItems((prev) =>
+                prev.map((item) =>
+                  item.itemId === id
+                    ? { ...item, ...data, itemId: id, position: adjustedPos, extraColumns: item.extraColumns }
+                    : item,
+                ),
+              );
+            }
           } else if (event.type === "status" && (event.data.phase === "reading_image" || event.data.phase === "transcribing")) {
             const statusPhase = event.data.phase as string;
             const label = statusPhase === "reading_image" ? "Čtu obrázek" : "Přepisuji hlasovku";
@@ -391,6 +415,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     if (phase === "review" && offerItems.length > 0) {
       const maxPos = Math.max(...offerItems.map((i) => i.position));
       const newOfferItems: OfferItem[] = items.map((item, i) => ({
+        itemId: generateItemId(),
         position: maxPos + 1 + i,
         originalName: item.name,
         unit: item.unit,
@@ -436,6 +461,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     addMessage("system", `Vyhledávám ${validItems.length} položek v katalogu…`);
 
     const emptyOfferItems: OfferItem[] = validItems.map((item, i) => ({
+      itemId: generateItemId(),
       position: i,
       originalName: item.name,
       unit: item.unit,
@@ -449,7 +475,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         : {}),
     }));
     setOfferItems(emptyOfferItems);
-    setSearchingSet(new Set(validItems.map((_, i) => i)));
+    const batchIdMap = emptyOfferItems.map((i) => i.itemId);
+    setSearchingSet(new Set(batchIdMap));
 
     try {
       const token = await getToken();
@@ -461,22 +488,26 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       for await (const event of stream) {
         if (event.type === "item_searching") {
           const pos = event.data.position as number;
-          setSearchingSet((prev) => new Set(prev).add(pos));
+          const id = batchIdMap[pos];
+          if (id) setSearchingSet((prev) => new Set(prev).add(id));
         } else if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(data.position);
-            return next;
-          });
-          flashPosition(data.position);
-          setOfferItems((prev) =>
-            prev.map((item) =>
-              item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns }
-                : item,
-            ),
-          );
+          const id = batchIdMap[data.position];
+          if (id) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            flashPosition(data.position);
+            setOfferItems((prev) =>
+              prev.map((item) =>
+                item.itemId === id
+                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
+                  : item,
+              ),
+            );
+          }
         } else if (event.type === "debug") {
           const d = event.data as unknown as DebugEntry;
           setDebugLog((prev) => [...prev, d]);
@@ -508,7 +539,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     if (notFoundItems.length === 0) return;
 
     setIsSearchingSemantic(true);
-    setSearchingSet(new Set(notFoundItems.map((i) => i.position)));
+    const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
+    setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
     addMessage("system", `Spouštím sémantické vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
 
     try {
@@ -526,18 +558,21 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       for await (const event of stream) {
         if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(data.position);
-            return next;
-          });
-          setOfferItems((prev) =>
-            prev.map((item) =>
-              item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns }
-                : item,
-            ),
-          );
+          const id = posToIdMap.get(data.position);
+          if (id) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setOfferItems((prev) =>
+              prev.map((item) =>
+                item.itemId === id
+                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
+                  : item,
+              ),
+            );
+          }
         } else if (event.type === "debug") {
           const d = event.data as unknown as DebugEntry;
           setDebugLog((prev) => [...prev, d]);
@@ -568,7 +603,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const handleConfirm = useCallback((item: OfferItem, selectedProduct: Product | null) => {
     setOfferItems((prev) =>
       prev.map((i) =>
-        i.position === item.position
+        i.itemId === item.itemId
           ? { ...i, product: selectedProduct, confirmed: true, matchType: "match" as const, confidence: 100 }
           : i,
       ),
@@ -579,7 +614,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const handleSkip = useCallback((item: OfferItem) => {
     setOfferItems((prev) =>
       prev.map((i) =>
-        i.position === item.position ? { ...i, confirmed: true } : i,
+        i.itemId === item.itemId ? { ...i, confirmed: true } : i,
       ),
     );
     setReviewItem(null);

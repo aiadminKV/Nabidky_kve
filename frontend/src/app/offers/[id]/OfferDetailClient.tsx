@@ -35,7 +35,7 @@ import type {
   SearchPreferences,
   ToolCallStatus,
 } from "@/lib/types";
-import { DEFAULT_SEARCH_PREFERENCES } from "@/lib/types";
+import { DEFAULT_SEARCH_PREFERENCES, generateItemId } from "@/lib/types";
 
 interface OfferDetailClientProps {
   offerId: string;
@@ -50,7 +50,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [parsedItems, setParsedItems] = useState<ParsedItem[]>([]);
   const [offerItems, setOfferItems] = useState<OfferItem[]>([]);
-  const [searchingSet, setSearchingSet] = useState<Set<number>>(new Set());
+  const [searchingSet, setSearchingSet] = useState<Set<string>>(new Set());
   const [reviewItem, setReviewItem] = useState<OfferItem | null>(null);
   const [isParsingChat, setIsParsingChat] = useState(false);
   const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
@@ -77,6 +77,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cachedToken, setCachedToken] = useState("");
   const batchPositionOffset = useRef(0);
+  const batchItemIds = useRef<string[]>([]);
   const idCounter = useRef(0);
   const changedTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -150,6 +151,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
         if (items && items.length > 0) {
           const restored: OfferItem[] = items.map((item) => ({
+            itemId: item.itemId ?? generateItemId(),
             position: item.position,
             originalName: item.originalName,
             unit: item.unit,
@@ -214,6 +216,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     try {
       const token = await getToken();
       const dtos: SaveOfferItemInput[] = items.map((i) => ({
+        itemId: i.itemId,
         position: i.position,
         originalName: i.originalName,
         unit: i.unit,
@@ -301,7 +304,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
   const buildOfferSummary = useCallback((): OfferItemSummary[] => {
     return offerItems.map((i) => ({
-      position: i.position,
+      itemId: i.itemId,
+      displayNumber: i.position + 1,
       name: i.originalName,
       sku: i.product?.sku ?? null,
       manufacturer: i.product?.manufacturer ?? null,
@@ -333,23 +337,28 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
             const offset = maxPos + 1;
             batchPositionOffset.current = offset;
-            const newItems: OfferItem[] = action.items.map((item, i) => ({
-              position: offset + i,
-              originalName: item.name,
-              unit: item.unit,
-              quantity: item.quantity,
-              matchType: "not_found" as const,
-              confidence: 0,
-              product: null,
-              candidates: [],
-            }));
+            const ids: string[] = [];
+            const newItems: OfferItem[] = action.items.map((item, i) => {
+              const id = generateItemId();
+              ids.push(id);
+              return {
+                itemId: id,
+                position: offset + i,
+                originalName: item.name,
+                unit: item.unit,
+                quantity: item.quantity,
+                matchType: "not_found" as const,
+                confidence: 0,
+                product: null,
+                candidates: [],
+              };
+            });
+            batchItemIds.current = ids;
             return [...prev, ...newItems];
           });
           setSearchingSet((prev) => {
             const next = new Set(prev);
-            for (let i = 0; i < action.items.length; i++) {
-              next.add(batchPositionOffset.current + i);
-            }
+            for (const id of batchItemIds.current) next.add(id);
             return next;
           });
           if (phase === "idle" || phase === "parsed") setPhase("processing");
@@ -357,12 +366,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         }
         case "add_item": {
           const product = action.product ?? null;
+          const afterId = action.afterItemId ?? null;
+          const newItemId = generateItemId();
           setOfferItems((prev) => {
-            const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
-            const newPos = maxPos + 1;
-            flashPosition(newPos);
             const newItem: OfferItem = {
-              position: newPos,
+              itemId: newItemId,
+              position: 0,
               originalName: action.name,
               unit: product?.unit ?? null,
               quantity: action.quantity,
@@ -373,7 +382,19 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               reasoning: action.reasoning,
               reviewStatus: "ai_suggestion",
             };
-            const next = [...prev, newItem];
+            let next: OfferItem[];
+            if (afterId) {
+              const insertIdx = prev.findIndex((i) => i.itemId === afterId) + 1;
+              next = [
+                ...prev.slice(0, insertIdx),
+                newItem,
+                ...prev.slice(insertIdx),
+              ].map((item, idx) => ({ ...item, position: idx }));
+            } else {
+              const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
+              next = [...prev, { ...newItem, position: maxPos + 1 }];
+            }
+            flashPosition(next.find((i) => i.itemId === newItemId)?.position ?? 0);
             debouncedSaveItems(next);
             return next;
           });
@@ -384,10 +405,11 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         }
         case "replace_product": {
           const product = action.product ?? null;
-          flashPosition(action.position);
+          const targetItem = offerItems.find((i) => i.itemId === action.itemId);
+          if (targetItem) flashPosition(targetItem.position);
           setOfferItems((prev) => {
             const next = prev.map((i) =>
-              i.position === action.position
+              i.itemId === action.itemId
                 ? {
                     ...i,
                     product,
@@ -408,7 +430,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         }
         case "remove_item": {
           setOfferItems((prev) => {
-            const filtered = prev.filter((i) => i.position !== action.position);
+            const filtered = prev.filter((i) => i.itemId !== action.itemId);
             const next = filtered.map((item, idx) => ({ ...item, position: idx }));
             debouncedSaveItems(next);
             return next;
@@ -498,26 +520,30 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           } else if (event.type === "action") {
             processAction(event.data as unknown as OfferAction);
           } else if (event.type === "item_searching") {
-            const pos = (event.data.position as number) + batchPositionOffset.current;
-            setSearchingSet((prev) => new Set(prev).add(pos));
+            const pos = event.data.position as number;
+            const id = batchItemIds.current[pos];
+            if (id) setSearchingSet((prev) => new Set(prev).add(id));
           } else if (event.type === "item_matched") {
             const data = event.data as unknown as OfferItem;
-            const adjustedPos = data.position + batchPositionOffset.current;
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(adjustedPos);
-              return next;
-            });
-            flashPosition(adjustedPos);
-            setOfferItems((prev) => {
-              const next = prev.map((item) =>
-                item.position === adjustedPos
-                  ? { ...item, ...data, position: adjustedPos, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
-                  : item,
-              );
-              debouncedSaveItems(next);
-              return next;
-            });
+            const id = batchItemIds.current[data.position];
+            if (id) {
+              setSearchingSet((prev) => {
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+              });
+              const adjustedPos = data.position + batchPositionOffset.current;
+              flashPosition(adjustedPos);
+              setOfferItems((prev) => {
+                const next = prev.map((item) =>
+                  item.itemId === id
+                    ? { ...item, ...data, itemId: id, position: adjustedPos, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
+                    : item,
+                );
+                debouncedSaveItems(next);
+                return next;
+              });
+            }
           } else if (event.type === "status" && (event.data.phase === "reading_image" || event.data.phase === "transcribing")) {
             const statusPhase = event.data.phase as string;
             const label = statusPhase === "reading_image" ? "Čtu obrázek" : "Přepisuji hlasovku";
@@ -583,6 +609,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     if (phase === "review" && offerItems.length > 0) {
       const maxPos = Math.max(...offerItems.map((i) => i.position));
       const newOfferItems: OfferItem[] = items.map((item, i) => ({
+        itemId: generateItemId(),
         position: maxPos + 1 + i,
         originalName: item.name,
         unit: item.unit,
@@ -662,6 +689,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     addMessage("system", `Vyhledávám ${searchItems_.length} položek v katalogu…`);
 
     const emptyOfferItems: OfferItem[] = validItems.map((item, i) => ({
+      itemId: generateItemId(),
       position: i,
       originalName: item.name,
       unit: item.unit,
@@ -675,7 +703,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         : {}),
     }));
     setOfferItems(emptyOfferItems);
-    setSearchingSet(new Set(validItems.map((_, i) => i)));
+    const batchIdMap = emptyOfferItems.map((i) => i.itemId);
+    setSearchingSet(new Set(batchIdMap));
 
     try {
       const token = await getToken();
@@ -689,24 +718,28 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       for await (const event of stream) {
         if (event.type === "item_searching") {
           const pos = event.data.position as number;
-          setSearchingSet((prev) => new Set(prev).add(pos));
+          const id = batchIdMap[pos];
+          if (id) setSearchingSet((prev) => new Set(prev).add(id));
         } else if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(data.position);
-            return next;
-          });
-          flashPosition(data.position);
-          setOfferItems((prev) => {
-            const next = prev.map((item) =>
-              item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
-                : item,
-            );
-            debouncedSaveItems(next);
-            return next;
-          });
+          const id = batchIdMap[data.position];
+          if (id) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            flashPosition(data.position);
+            setOfferItems((prev) => {
+              const next = prev.map((item) =>
+                item.itemId === id
+                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
+                  : item,
+              );
+              debouncedSaveItems(next);
+              return next;
+            });
+          }
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           setPhase("review");
@@ -760,8 +793,9 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     );
     if (notFoundItems.length === 0) return;
 
+    const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
     setIsSearchingSemantic(true);
-    setSearchingSet(new Set(notFoundItems.map((i) => i.position)));
+    setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
     addMessage("system", `Spouštím sémantické vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
 
     try {
@@ -780,20 +814,23 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       for await (const event of stream) {
         if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(data.position);
-            return next;
-          });
-          setOfferItems((prev) => {
-            const next = prev.map((item) =>
-              item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
-                : item,
-            );
-            debouncedSaveItems(next);
-            return next;
-          });
+          const id = posToIdMap.get(data.position);
+          if (id) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setOfferItems((prev) => {
+              const next = prev.map((item) =>
+                item.itemId === id
+                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
+                  : item,
+              );
+              debouncedSaveItems(next);
+              return next;
+            });
+          }
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           addMessage("system", "Sémantické vyhledávání dokončeno.");
@@ -821,7 +858,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const handleConfirm = useCallback((item: OfferItem, selectedProduct: Product | null) => {
     setOfferItems((prev) => {
       const next = prev.map((i) =>
-        i.position === item.position
+        i.itemId === item.itemId
           ? {
               ...i,
               originalName: item.originalName,
@@ -877,6 +914,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setOfferItems((prev) => {
       const maxPos = prev.length > 0 ? Math.max(...prev.map((i) => i.position)) : -1;
       const newItem: OfferItem = {
+        itemId: generateItemId(),
         position: maxPos + 1,
         originalName: "",
         unit: null,
@@ -893,12 +931,42 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     if (phase === "idle" || phase === "parsed") setPhase("review");
   }, [phase, debouncedSaveItems]);
 
-  const handleDeleteItem = useCallback((position: number) => {
+  const handleDeleteItem = useCallback((itemId: string) => {
     setOfferItems((prev) => {
-      const filtered = prev.filter((i) => i.position !== position);
+      const filtered = prev.filter((i) => i.itemId !== itemId);
       const next = filtered.map((item, idx) => ({ ...item, position: idx }));
       debouncedSaveItems(next);
       return next;
+    });
+  }, [debouncedSaveItems]);
+
+  const handleReorder = useCallback((reorderedItems: OfferItem[]) => {
+    setOfferItems(reorderedItems);
+    debouncedSaveItems(reorderedItems);
+  }, [debouncedSaveItems]);
+
+  const handleInsertAt = useCallback((afterPosition: number) => {
+    setOfferItems((prev) => {
+      const insertIdx = prev.findIndex((i) => i.position === afterPosition) + 1;
+      const newItem: OfferItem = {
+        itemId: generateItemId(),
+        position: 0,
+        originalName: "",
+        unit: null,
+        quantity: null,
+        matchType: "not_found",
+        confidence: 0,
+        product: null,
+        candidates: [],
+        reasoning: "",
+      };
+      const spliced = [
+        ...prev.slice(0, insertIdx),
+        newItem,
+        ...prev.slice(insertIdx),
+      ].map((item, idx) => ({ ...item, position: idx }));
+      debouncedSaveItems(spliced);
+      return spliced;
     });
   }, [debouncedSaveItems]);
 
@@ -924,7 +992,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       reviewStatus: undefined,
     }));
     setOfferItems(resetItems);
-    setSearchingSet(new Set(resetItems.map((_, i) => i)));
+    const batchIdMap = resetItems.map((i) => i.itemId);
+    setSearchingSet(new Set(batchIdMap));
 
     try {
       const token = await getToken();
@@ -937,24 +1006,28 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       for await (const event of stream) {
         if (event.type === "item_searching") {
           const pos = event.data.position as number;
-          setSearchingSet((prev) => new Set(prev).add(pos));
+          const id = batchIdMap[pos];
+          if (id) setSearchingSet((prev) => new Set(prev).add(id));
         } else if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(data.position);
-            return next;
-          });
-          flashPosition(data.position);
-          setOfferItems((prev) => {
-            const next = prev.map((item) =>
-              item.position === data.position
-                ? { ...item, ...data, extraColumns: item.extraColumns }
-                : item,
-            );
-            debouncedSaveItems(next);
-            return next;
-          });
+          const id = batchIdMap[data.position];
+          if (id) {
+            setSearchingSet((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            flashPosition(data.position);
+            setOfferItems((prev) => {
+              const next = prev.map((item) =>
+                item.itemId === id
+                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
+                  : item,
+              );
+              debouncedSaveItems(next);
+              return next;
+            });
+          }
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           setPhase("review");
@@ -978,11 +1051,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
   const handleSearchSingleItem = useCallback(async (item: OfferItem) => {
     if (!item.originalName.trim()) return;
+    const targetId = item.itemId;
 
-    setSearchingSet((prev) => new Set(prev).add(item.position));
+    setSearchingSet((prev) => new Set(prev).add(targetId));
     setOfferItems((prev) =>
       prev.map((i) =>
-        i.position === item.position
+        i.itemId === targetId
           ? { ...i, matchType: "not_found" as const, confidence: 0, product: null, candidates: [], confirmed: undefined, reviewStatus: undefined }
           : i,
       ),
@@ -1001,14 +1075,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           const data = event.data as unknown as OfferItem;
           setSearchingSet((prev) => {
             const next = new Set(prev);
-            next.delete(data.position);
+            next.delete(targetId);
             return next;
           });
-          flashPosition(data.position);
+          flashPosition(item.position);
           setOfferItems((prev) => {
             const next = prev.map((i) =>
-              i.position === data.position
-                ? { ...i, ...data, extraColumns: i.extraColumns }
+              i.itemId === targetId
+                ? { ...i, ...data, itemId: targetId, extraColumns: i.extraColumns }
                 : i,
             );
             debouncedSaveItems(next);
@@ -1024,7 +1098,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     } finally {
       setSearchingSet((prev) => {
         const next = new Set(prev);
-        next.delete(item.position);
+        next.delete(targetId);
         return next;
       });
     }
@@ -1229,6 +1303,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             onAddItem={handleAddItem}
             onDeleteItem={handleDeleteItem}
             onSearchItem={handleSearchSingleItem}
+            onReorder={handleReorder}
+            onInsertAt={handleInsertAt}
             isSearchingSemantic={isSearchingSemantic}
             isProcessing={searchingSet.size > 0}
             token={cachedToken}
