@@ -11,7 +11,7 @@ import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
-import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx } from "@/lib/api";
+import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx } from "@/lib/api";
 import {
   generateItemId,
   type ChatMessage,
@@ -632,22 +632,24 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   // Export & reset
   // ──────────────────────────────────────────────────────────
 
+  const buildExportItems = useCallback(() =>
+    offerItems.map((item) => ({
+      originalName: item.originalName,
+      quantity: item.quantity,
+      unit: item.unit,
+      sku: item.product?.sku ?? null,
+      productName: item.product?.name ?? null,
+      manufacturerCode: item.product?.manufacturer_code ?? null,
+      manufacturer: item.product?.manufacturer ?? null,
+      matchType: item.matchType,
+      confidence: item.confidence,
+    })),
+  [offerItems]);
+
   const handleExport = useCallback(async () => {
     try {
       const token = await getToken();
-      const exportItems = offerItems.map((item) => ({
-        originalName: item.originalName,
-        quantity: item.quantity,
-        unit: item.unit,
-        sku: item.product?.sku ?? null,
-        productName: item.product?.name ?? null,
-        manufacturerCode: item.product?.manufacturer_code ?? null,
-        manufacturer: item.product?.manufacturer ?? null,
-        matchType: item.matchType,
-        confidence: item.confidence,
-      }));
-
-      const blob = await downloadXlsx(exportItems, offerHeader, token);
+      const blob = await downloadXlsx(buildExportItems(), offerHeader, token);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -657,7 +659,22 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     } catch {
       addMessage("system", "Export se nezdařil.");
     }
-  }, [offerItems, offerHeader, getToken, addMessage]);
+  }, [buildExportItems, offerHeader, getToken, addMessage]);
+
+  const handleExportSap = useCallback(async () => {
+    try {
+      const token = await getToken();
+      const blob = await downloadSapXlsx(buildExportItems(), offerHeader, token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kv-sap-${Date.now()}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      addMessage("system", "Export SAP se nezdařil.");
+    }
+  }, [buildExportItems, offerHeader, getToken, addMessage]);
 
   const handleReset = useCallback(() => {
     setPhase("idle");
@@ -719,6 +736,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             changedPositions={changedPositions}
             onItemClick={handleItemClick}
             onExport={handleExport}
+            onExportSap={handleExportSap}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
             isSearchingSemantic={isSearchingSemantic}

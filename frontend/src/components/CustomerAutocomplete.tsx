@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { searchCustomers, type CustomerSuggestion } from "@/lib/api";
 
 interface CustomerAutocompleteProps {
@@ -23,7 +24,10 @@ export function CustomerAutocomplete({
   const [isLoading, setIsLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
 
   useEffect(() => {
@@ -32,13 +36,40 @@ export function CustomerAutocomplete({
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideInput = ref.current?.contains(target);
+      const insideList = listRef.current?.contains(target);
+      if (!insideInput && !insideList) {
         setOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!open || !inputRef.current) return;
+
+    const updatePosition = () => {
+      if (!inputRef.current) return;
+      const rect = inputRef.current.getBoundingClientRect();
+      setDropdownStyle({
+        position: "fixed",
+        top: rect.bottom + 6,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
 
   const search = useCallback(
     async (q: string) => {
@@ -111,6 +142,7 @@ export function CustomerAutocomplete({
           />
         </svg>
         <input
+          ref={inputRef}
           type="text"
           value={query}
           onChange={(e) => handleInputChange(e.target.value)}
@@ -146,53 +178,59 @@ export function CustomerAutocomplete({
         )}
       </div>
 
-      {open && suggestions.length > 0 && (
-        <div className="absolute top-full left-0 z-50 mt-1.5 w-full max-h-72 overflow-y-auto rounded-xl border border-kv-gray-200 bg-white shadow-2xl shadow-black/8">
-          {suggestions.map((s, i) => (
-            <button
-              key={s.source_kunnr}
-              type="button"
-              onClick={() => selectSuggestion(s)}
-              onMouseEnter={() => setActiveIndex(i)}
-              className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                i === activeIndex ? "bg-kv-navy/5" : "hover:bg-kv-gray-50"
-              } ${i < suggestions.length - 1 ? "border-b border-kv-gray-100" : ""}`}
-            >
-              <svg
-                className="mt-0.5 h-4 w-4 shrink-0 text-kv-navy/40"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.5}
+      {open && suggestions.length > 0 && typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={listRef}
+            style={dropdownStyle}
+            className="max-h-72 overflow-y-auto rounded-xl border border-kv-gray-200 bg-white shadow-2xl shadow-black/8"
+          >
+            {suggestions.map((s, i) => (
+              <button
+                key={s.source_kunnr}
+                type="button"
+                onClick={() => selectSuggestion(s)}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
+                  i === activeIndex ? "bg-kv-navy/5" : "hover:bg-kv-gray-50"
+                } ${i < suggestions.length - 1 ? "border-b border-kv-gray-100" : ""}`}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z"
-                />
-              </svg>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-kv-dark truncate">{s.name}</div>
-                <div className="mt-0.5 flex items-center gap-2 text-xs text-kv-gray-400">
-                  <span className="tabular-nums">ID {s.source_kunnr}</span>
-                  {s.ico && (
-                    <>
-                      <span className="text-kv-gray-200">·</span>
-                      <span className="tabular-nums">IČ {s.ico}</span>
-                    </>
-                  )}
-                  {s.address && (
-                    <>
-                      <span className="text-kv-gray-200">·</span>
-                      <span className="truncate">{s.address}</span>
-                    </>
-                  )}
+                <svg
+                  className="mt-0.5 h-4 w-4 shrink-0 text-kv-navy/40"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z"
+                  />
+                </svg>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-kv-dark truncate">{s.name}</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-kv-gray-400">
+                    <span className="tabular-nums">ID {s.source_kunnr}</span>
+                    {s.ico && (
+                      <>
+                        <span className="text-kv-gray-200">·</span>
+                        <span className="tabular-nums">IČ {s.ico}</span>
+                      </>
+                    )}
+                    {s.address && (
+                      <>
+                        <span className="text-kv-gray-200">·</span>
+                        <span className="truncate">{s.address}</span>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

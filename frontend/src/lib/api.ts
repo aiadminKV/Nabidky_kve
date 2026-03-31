@@ -154,6 +154,24 @@ export async function downloadXlsx(
   return res.blob();
 }
 
+/** Download SAP flat XLSX export (REST) */
+export async function downloadSapXlsx(
+  items: Array<Record<string, unknown>>,
+  header: OfferHeader,
+  token: string,
+): Promise<Blob> {
+  const res = await fetch(`${BACKEND_URL}/export/sap-xlsx`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ items, header }),
+  });
+  if (!res.ok) throw new Error("SAP export failed");
+  return res.blob();
+}
+
 /** Upload a pricelist Excel file (REST) */
 export async function uploadPricelist(
   file: File,

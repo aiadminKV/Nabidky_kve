@@ -15,7 +15,7 @@ import { SearchPreferencesBar } from "@/components/SearchPreferencesBar";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
-  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx,
+  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx,
   getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan,
   type ChatMessageDTO, type SaveOfferItemInput, type SearchPlan,
 } from "@/lib/api";
@@ -1216,23 +1216,25 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   // Export & reset
   // ──────────────────────────────────────────────────────────
 
+  const buildExportItems = useCallback(() =>
+    offerItems.map((item) => ({
+      originalName: item.originalName,
+      quantity: item.quantity,
+      unit: item.unit,
+      sku: item.product?.sku ?? null,
+      productName: item.product?.name ?? null,
+      manufacturerCode: item.product?.manufacturer_code ?? null,
+      manufacturer: item.product?.manufacturer ?? null,
+      matchType: item.matchType,
+      confidence: item.confidence,
+    })),
+  [offerItems]);
+
   const doExport = useCallback(async () => {
     let exported = false;
     try {
       const token = await getToken();
-      const exportItems = offerItems.map((item) => ({
-        originalName: item.originalName,
-        quantity: item.quantity,
-        unit: item.unit,
-        sku: item.product?.sku ?? null,
-        productName: item.product?.name ?? null,
-        manufacturerCode: item.product?.manufacturer_code ?? null,
-        manufacturer: item.product?.manufacturer ?? null,
-        matchType: item.matchType,
-        confidence: item.confidence,
-      }));
-
-      const blob = await downloadXlsx(exportItems, offerHeader, token);
+      const blob = await downloadXlsx(buildExportItems(), offerHeader, token);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1252,7 +1254,33 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         // status update is best-effort
       }
     }
-  }, [offerItems, offerHeader, offerId, getToken, addMessage]);
+  }, [buildExportItems, offerHeader, offerId, getToken, addMessage]);
+
+  const doExportSap = useCallback(async () => {
+    let exported = false;
+    try {
+      const token = await getToken();
+      const blob = await downloadSapXlsx(buildExportItems(), offerHeader, token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kv-sap-${Date.now()}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      exported = true;
+    } catch {
+      addMessage("system", "Export SAP se nezdařil.");
+    }
+
+    if (exported) {
+      try {
+        const token = await getToken();
+        await updateOffer(offerId, { status: "exported" }, token);
+      } catch {
+        // status update is best-effort
+      }
+    }
+  }, [buildExportItems, offerHeader, offerId, getToken, addMessage]);
 
   const handleExport = useCallback(() => {
     const unreviewedCount = offerItems.filter((i) => i.reviewStatus !== "reviewed").length;
@@ -1262,6 +1290,15 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       doExport();
     }
   }, [offerItems, doExport]);
+
+  const handleExportSap = useCallback(() => {
+    const unreviewedCount = offerItems.filter((i) => i.reviewStatus !== "reviewed").length;
+    if (unreviewedCount > 0) {
+      setExportWarning(unreviewedCount);
+    } else {
+      doExportSap();
+    }
+  }, [offerItems, doExportSap]);
 
   const handleExportConfirm = useCallback(() => {
     setExportWarning(null);
@@ -1405,6 +1442,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             changedPositions={changedPositions}
             onItemClick={handleItemClick}
             onExport={handleExport}
+            onExportSap={handleExportSap}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
             onProcessAgain={handleProcessAgain}

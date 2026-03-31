@@ -233,4 +233,95 @@ function getMatchColor(type: string): string | null {
   return map[type] ?? null;
 }
 
+/**
+ * POST /export/sap-xlsx
+ * Generate XLSX in SAP flat format.
+ * Single header row with customer fields + item fields.
+ * First item row contains customer data; subsequent rows have empty customer cells.
+ */
+exportRouter.post("/export/sap-xlsx", authMiddleware, async (c) => {
+  const { header, items } = await c.req.json<{
+    header?: Partial<OfferHeader>;
+    items: ExportItem[];
+  }>();
+
+  if (!items?.length) {
+    return c.json({ error: "Items are required" }, 400);
+  }
+
+  const h: OfferHeader = {
+    customerId: header?.customerId ?? "",
+    customerIco: header?.customerIco ?? "",
+    customerName: header?.customerName ?? "",
+    deliveryDate: header?.deliveryDate ?? "",
+    offerName: header?.offerName ?? "",
+    phone: header?.phone ?? "",
+    email: header?.email ?? "",
+    specialAction: header?.specialAction ?? "",
+    branch: header?.branch ?? "",
+    deliveryAddress: header?.deliveryAddress ?? "",
+  };
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.created = new Date();
+  workbook.creator = "KV Elektro – Správce nabídek";
+
+  const sheet = workbook.addWorksheet("SAP");
+
+  // Single header row: customer fields + ARTICLES + item fields
+  const allHeaders = [
+    "ID", "IC", "Nazev", "termin_dodani", "Nazev_zakazky_cislo",
+    "tel", "email", "spec_akce", "pobocka", "adresa_dodani",
+    "ARTICLES", "ARTIKL", "PRODID", "POPIS", "MNOZSTVI", "MJ",
+  ];
+  const headerRow = sheet.addRow(allHeaders);
+  applyHeaderStyle(headerRow, allHeaders.length);
+
+  // Data rows: customer data in first row only, items stacked
+  items.forEach((item, idx) => {
+    const customerCells = idx === 0
+      ? [
+          h.customerId, h.customerIco, h.customerName, h.deliveryDate,
+          h.offerName, h.phone, h.email, h.specialAction, h.branch, h.deliveryAddress,
+          items.length,
+        ]
+      : ["", "", "", "", "", "", "", "", "", "", ""];
+
+    const row = sheet.addRow([
+      ...customerCells,
+      item.sku ?? "",
+      item.manufacturerCode ?? "",
+      item.originalName,
+      item.quantity ?? "",
+      item.unit ?? "ks",
+    ]);
+    row.font = CELL_FONT;
+  });
+
+  // Column widths
+  sheet.getColumn(1).width = 12;   // ID
+  sheet.getColumn(2).width = 14;   // IC
+  sheet.getColumn(3).width = 22;   // Nazev
+  sheet.getColumn(4).width = 14;   // termin_dodani
+  sheet.getColumn(5).width = 28;   // Nazev_zakazky_cislo
+  sheet.getColumn(6).width = 14;   // tel
+  sheet.getColumn(7).width = 24;   // email
+  sheet.getColumn(8).width = 12;   // spec_akce
+  sheet.getColumn(9).width = 14;   // pobocka
+  sheet.getColumn(10).width = 30;  // adresa_dodani
+  sheet.getColumn(11).width = 10;  // ARTICLES
+  sheet.getColumn(12).width = 14;  // ARTIKL
+  sheet.getColumn(13).width = 18;  // PRODID
+  sheet.getColumn(14).width = 45;  // POPIS
+  sheet.getColumn(15).width = 12;  // MNOZSTVI
+  sheet.getColumn(16).width = 8;   // MJ
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  c.header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  c.header("Content-Disposition", `attachment; filename="kv-sap-${Date.now()}.xlsx"`);
+
+  return c.body(buffer as ArrayBuffer);
+});
+
 export { exportRouter };

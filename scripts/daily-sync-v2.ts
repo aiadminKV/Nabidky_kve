@@ -600,6 +600,7 @@ async function applyChanges(
           is_stock_item: isStockItem(p.dispo),
           source_ean_raw: p.ean || null,
           source_idnlf_raw: p.idnlf || null,
+          embedding_stale: true,
         };
       });
 
@@ -839,101 +840,66 @@ async function applyChanges(
 
 // ─── Phase 6: Re-embed ──────────────────────────────────────────────
 
-async function reembed(
-  diff: DiffResult,
-  matnrIds: Map<string, number>,
-): Promise<void> {
-  // Collect MATNRs that need re-embedding from current diff
-  const reembedSet = new Set<string>();
-  for (const m of diff.newProducts) reembedSet.add(m);
-  for (const c of diff.nameChanges) reembedSet.add(c.matnr);
-  for (const c of diff.supplierChanges) reembedSet.add(c.matnr);
+async function reembed(): Promise<void> {
+  // Load all products marked as embedding_stale — set atomically in Phase 5
+  // whenever name or supplier changes, or a new product is inserted.
+  // This survives crashes: if Phase 6 fails, flags remain true for the next sync.
+  const queryClient = await makePgClient();
 
-  // Also detect stale embeddings — products whose name changed in a previous crashed sync.
-  // These won't appear in the diff (DB name already matches API), but their embedding_text
-  // still contains the old name and would be permanently wrong without this check.
-  {
-    const staleClient = await makePgClient();
-    try {
-      const staleRes = await staleClient.query<{ source_matnr: string }>(
-        `SELECT p.source_matnr
-         FROM products_v2 p
-         JOIN product_embeddings_v2 e ON e.product_id = p.id
-         WHERE p.removed_at IS NULL
-           AND p.name IS NOT NULL AND p.name != ''
-           AND split_part(e.embedding_text, E'\\n', 1) != p.name`,
-      );
-      let staleCount = 0;
-      for (const r of staleRes.rows) {
-        if (!reembedSet.has(r.source_matnr)) {
-          reembedSet.add(r.source_matnr);
-          staleCount++;
-        }
-      }
-      if (staleCount > 0) {
-        log({ phase: "embed", status: "warn", message: `Found ${fmt(staleCount)} products with stale embeddings from a previous interrupted sync — adding to re-embed queue` });
-      }
-    } finally {
-      await staleClient.end();
-    }
+  type StaleProduct = {
+    id: number; source_matnr: string; sku: string; name: string;
+    supplier_name: string | null; category_main: string | null;
+    category_sub: string | null; category_line: string | null;
+    description: string | null; search_hints: string | null;
+  };
+
+  let staleProducts: StaleProduct[];
+  try {
+    const res = await queryClient.query<StaleProduct>(
+      `SELECT id, source_matnr, sku, name, supplier_name, category_main,
+              category_sub, category_line, description, search_hints
+       FROM products_v2
+       WHERE embedding_stale = true AND removed_at IS NULL`,
+    );
+    staleProducts = res.rows;
+  } finally {
+    await queryClient.end();
   }
 
-  if (reembedSet.size === 0) {
+  // Filter out products with empty names (OpenAI rejects empty input)
+  const validItems = staleProducts.filter((p) => {
+    const text = buildEmbeddingText(p).trim();
+    return text.length > 0;
+  });
+  const skipped = staleProducts.length - validItems.length;
+
+  if (validItems.length === 0) {
     log({ phase: "embed", status: "info", message: "No products need re-embedding." });
     return;
   }
 
-  log({ phase: "embed", status: "info", message: `Re-embedding ${fmt(reembedSet.size)} products...` });
+  log({
+    phase: "embed", status: "info",
+    message: `Re-embedding ${fmt(validItems.length)} products (${fmt(skipped)} skipped, empty name)...`,
+  });
   const t = Date.now();
 
+  // Threshold check — same safety limits apply to re-embedding
+  if (!FORCE && validItems.length > T_REEMBED) {
+    const msg = `Re-embed count (${fmt(validItems.length)}) exceeds threshold (${fmt(T_REEMBED)})`;
+    log({ phase: "embed", status: "alert", message: msg });
+    await sendWebhook("alert", `Embedding threshold exceeded: ${msg}`);
+    log({ phase: "embed", status: "warn", message: "Skipping re-embed phase. Use --force to override." });
+    return;
+  }
+
   const openai = new OpenAI({ apiKey: OPENAI_KEY });
-
-  // Load product data for embedding text construction via pg
-  const pids = [...reembedSet].map((m) => matnrIds.get(m)!).filter(Boolean);
-  const productData = new Map<string, {
-    name: string; supplier_name: string | null;
-    category_main: string | null; category_sub: string | null; category_line: string | null;
-    description: string | null; search_hints: string | null; sku: string;
-  }>();
-
-  const pgClient = await makePgClient();
-  try {
-    const res = await pgClient.query(
-      `SELECT source_matnr, sku, name, supplier_name, category_main, category_sub,
-              category_line, description, search_hints
-       FROM products_v2 WHERE id = ANY($1)`,
-      [pids],
-    );
-    for (const r of res.rows) {
-      productData.set(r.source_matnr, {
-        name: r.name, supplier_name: r.supplier_name,
-        category_main: r.category_main, category_sub: r.category_sub,
-        category_line: r.category_line, description: r.description,
-        search_hints: r.search_hints, sku: r.sku,
-      });
-    }
-  } finally {
-    await pgClient.end();
-  }
-
-  // Filter out products with empty embedding text (empty name etc.)
-  const validItems = [...productData.entries()].filter(([, p]) => {
-    const text = buildEmbeddingText(p).trim();
-    return text.length > 0;
-  });
-  const skipped = productData.size - validItems.length;
-  if (skipped > 0) {
-    log({ phase: "embed", status: "warn", message: `Skipped ${fmt(skipped)} products with empty name/text` });
-  }
-
-  // Generate embeddings in batches
   let processed = 0;
   let errors = 0;
-  const items = validItems;
 
-  for (let i = 0; i < items.length; i += EMBED_BATCH_SIZE) {
-    const batch = items.slice(i, i + EMBED_BATCH_SIZE);
-    const texts = batch.map(([, p]) => buildEmbeddingText(p));
+  for (let i = 0; i < validItems.length; i += EMBED_BATCH_SIZE) {
+    const batch = validItems.slice(i, i + EMBED_BATCH_SIZE);
+    const texts = batch.map((p) => buildEmbeddingText(p));
 
     let retries = 0;
     let success = false;
@@ -946,14 +912,12 @@ async function reembed(
           input: texts,
         });
 
-        // Upsert embeddings via pg (handles vector cast natively)
+        // Fresh pg connection per batch — prevents ETIMEDOUT on long-running syncs
         const embedPg = await makePgClient();
         try {
           await embedPg.query("BEGIN");
           for (let idx = 0; idx < batch.length; idx++) {
-            const [matnr, p] = batch[idx];
-            const pid = matnrIds.get(matnr);
-            if (!pid) continue;
+            const p = batch[idx];
             const vec = JSON.stringify(resp.data[idx].embedding);
             await embedPg.query(
               `INSERT INTO product_embeddings_v2 (product_id, sku, embedding, embedding_text, model_version, created_at)
@@ -961,9 +925,15 @@ async function reembed(
                ON CONFLICT (product_id) DO UPDATE SET
                  sku = EXCLUDED.sku, embedding = EXCLUDED.embedding,
                  embedding_text = EXCLUDED.embedding_text, model_version = EXCLUDED.model_version`,
-              [pid, p.sku, vec, texts[idx]],
+              [p.id, p.sku, vec, texts[idx]],
             );
           }
+          // Clear stale flag for this batch — same transaction as the embedding write
+          const batchIds = batch.map((p) => p.id);
+          await embedPg.query(
+            `UPDATE products_v2 SET embedding_stale = false WHERE id = ANY($1)`,
+            [batchIds],
+          );
           await embedPg.query("COMMIT");
         } catch (pgErr) {
           await embedPg.query("ROLLBACK");
@@ -983,7 +953,6 @@ async function reembed(
           await sleep(wait);
         } else if (retries >= EMBED_MAX_RETRIES) {
           errors += batch.length;
-          processed += batch.length;
           log({ phase: "embed", status: "error", message: `Batch failed after ${EMBED_MAX_RETRIES} retries: ${msg}` });
         } else {
           await sleep(1000 * retries);
@@ -1097,11 +1066,15 @@ function collectMetadataUpdates(
   }
 
   for (const c of diff.nameChanges) {
-    getOrCreate(c.matnr).name = c.new_;
+    const patch = getOrCreate(c.matnr);
+    patch.name = c.new_;
+    patch.embedding_stale = true;
   }
 
   for (const c of diff.supplierChanges) {
-    getOrCreate(c.matnr).supplier_name = c.new_ || null;
+    const patch = getOrCreate(c.matnr);
+    patch.supplier_name = c.new_ || null;
+    patch.embedding_stale = true;
   }
 
   for (const c of diff.statusChanges) {
@@ -1212,7 +1185,7 @@ async function main() {
 
     // Phase 6: Re-embed
     if (!SKIP_EMBED) {
-      await reembed(diff, matnrIds);
+      await reembed();
     } else {
       log({ phase: "embed", status: "info", message: "Skipped (--skip-embed)" });
     }
