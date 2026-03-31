@@ -843,11 +843,40 @@ async function reembed(
   diff: DiffResult,
   matnrIds: Map<string, number>,
 ): Promise<void> {
-  // Collect MATNRs that need re-embedding
+  // Collect MATNRs that need re-embedding from current diff
   const reembedSet = new Set<string>();
   for (const m of diff.newProducts) reembedSet.add(m);
   for (const c of diff.nameChanges) reembedSet.add(c.matnr);
   for (const c of diff.supplierChanges) reembedSet.add(c.matnr);
+
+  // Also detect stale embeddings — products whose name changed in a previous crashed sync.
+  // These won't appear in the diff (DB name already matches API), but their embedding_text
+  // still contains the old name and would be permanently wrong without this check.
+  {
+    const staleClient = await makePgClient();
+    try {
+      const staleRes = await staleClient.query<{ source_matnr: string }>(
+        `SELECT p.source_matnr
+         FROM products_v2 p
+         JOIN product_embeddings_v2 e ON e.product_id = p.id
+         WHERE p.removed_at IS NULL
+           AND p.name IS NOT NULL AND p.name != ''
+           AND split_part(e.embedding_text, E'\\n', 1) != p.name`,
+      );
+      let staleCount = 0;
+      for (const r of staleRes.rows) {
+        if (!reembedSet.has(r.source_matnr)) {
+          reembedSet.add(r.source_matnr);
+          staleCount++;
+        }
+      }
+      if (staleCount > 0) {
+        log({ phase: "embed", status: "warn", message: `Found ${fmt(staleCount)} products with stale embeddings from a previous interrupted sync — adding to re-embed queue` });
+      }
+    } finally {
+      await staleClient.end();
+    }
+  }
 
   if (reembedSet.size === 0) {
     log({ phase: "embed", status: "info", message: "No products need re-embedding." });
