@@ -264,10 +264,13 @@ AS $$
 DECLARE
   sanitized text;
   safe_lookup text;
+  sanitized_nospace text;
 BEGIN
   sanitized := trim(unaccent(lookup_query));
   safe_lookup := replace(replace(replace(
-    sanitized, '\', '\\'), '%', '\%'), '_', '\_');
+    sanitized, E'\\', E'\\\\'), '%', '\%'), '_', '\_');
+  -- Space-normalized version for ABB-style codes: "5518-2929S" matches "5518-2929 S"
+  sanitized_nospace := replace(sanitized, ' ', '');
 
   RETURN QUERY
   WITH matches AS (
@@ -290,6 +293,21 @@ BEGIN
     FROM product_identifiers_v2 pi
     JOIN products_v2 p ON p.id = pi.product_id
     WHERE pi.identifier_value = sanitized
+      AND (include_removed OR p.removed_at IS NULL)
+
+    UNION ALL
+
+    -- Space-normalized exact match: handles codes like "5518-2929S" vs "5518-2929 S" in DB
+    SELECT
+      p.id AS product_id,
+      2 AS priority,
+      'idnlf_normalized'::text AS found_match_type,
+      pi.identifier_value AS found_match_value
+    FROM product_identifiers_v2 pi
+    JOIN products_v2 p ON p.id = pi.product_id
+    WHERE replace(pi.identifier_value, ' ', '') = sanitized_nospace
+      AND pi.identifier_value != sanitized
+      AND length(sanitized_nospace) >= 6
       AND (include_removed OR p.removed_at IS NULL)
 
     UNION ALL
@@ -327,12 +345,13 @@ BEGIN
     p.is_stock_item,
     EXISTS (SELECT 1 FROM product_branch_stock_v2 bs WHERE bs.product_id = p.id) AS has_stock,
     p.removed_at,
-    r.resolved_match_type,
-    r.resolved_match_value
-  FROM ranked r
-  JOIN products_v2 p ON p.id = r.product_id
+    ranked.resolved_match_type AS match_type,
+    ranked.resolved_match_value AS matched_value
+  FROM ranked
+  JOIN products_v2 p ON p.id = ranked.product_id
   LEFT JOIN product_price_v2 pr ON pr.product_id = p.id
-  ORDER BY r.priority, p.sku
+  WHERE (include_removed OR p.removed_at IS NULL)
+  ORDER BY ranked.priority, length(ranked.resolved_match_value)
   LIMIT max_results;
 END;
 $$;

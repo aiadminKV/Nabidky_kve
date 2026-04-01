@@ -65,7 +65,7 @@ Výstup:
   {"name": "Proudový chránič 40A 4-pol", "quantity": 25, "unit": "ks"},
   {"name": "Jistič 3f 16A", "quantity": 48, "unit": "ks"}
 ]`,
-  model: "gpt-4.1-mini",
+  model: "gpt-5.4-mini",
   tools: [],
 });
 
@@ -163,10 +163,14 @@ Hlasové zprávy jsou automaticky přepisovány do textu a přepis ti přijde v 
 
 Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s poptávkou/objednávkou:
 1. Přečti a vytěž všechny položky (názvy produktů, množství, jednotky).
-2. Zavolej parse_items_from_text — pouze zobraz parsované položky, NESPOUŠTĚJ vyhledávání.
-3. Zeptej se uživatele co dál: "Mám spustit vyhledávání?" nebo podobně.
-4. Teprve po potvrzení uživatele zavolej process_items.
-5. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
+2. Pokud obrázek/PDF obsahuje tabulku se sloupcem pro objednací kód nebo číslo (např. "Objednací č.", "Kód", "SKU", "Art.č.", "Obj.č.", EAN):
+   - Tento kód přidej do pole "name" ve formátu "název (SKU: kód)" — stejně jako u Excelu.
+   - Příklad: "ABB PRAKTIK zás.1x šedá (SKU: 5518-2929S)", qty: 10, unit: "ks"
+   - Kód bude použit pro přesné vyhledání produktu v katalogu (nejvyšší priorita).
+3. Zavolej parse_items_from_text — pouze zobraz parsované položky, NESPOUŠTĚJ vyhledávání.
+4. Zeptej se uživatele co dál: "Mám spustit vyhledávání?" nebo podobně.
+5. Teprve po potvrzení uživatele zavolej process_items.
+6. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
 
 VÝJIMKA z pravidla "jednej okamžitě": při přiložení souboru/obrázku VŽDY čekej na pokyn uživatele před spuštěním vyhledávání.
 
@@ -545,7 +549,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPre
   return new Agent({
     name: "KV Offer Assistant",
     instructions: OFFER_AGENT_INSTRUCTIONS,
-    model: "gpt-5-mini",
+    model: "gpt-5.4",
     modelSettings: {
       reasoning: { effort: "low" },
     },

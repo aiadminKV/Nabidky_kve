@@ -14,7 +14,7 @@ import {
   type StockFilterOptions,
 } from "./search.js";
 
-const PIPELINE_MODEL = "gpt-5-mini";
+const PIPELINE_MODEL = "gpt-5.4-mini";
 const MAX_RESULTS_FULLTEXT = 30;
 const MAX_RESULTS_SEMANTIC = 50;
 const SIM_THRESHOLD = 0.35;
@@ -501,6 +501,7 @@ const EXACT_COSINE: Record<string, number> = {
   sku_exact: 1.0,
   ean_exact: 0.98,
   idnlf_exact: 0.98,
+  idnlf_normalized: 0.97,  // space-normalized match: "5518-2929S" matches "5518-2929 S"
   ean_contains: 0.90,
   idnlf_contains: 0.90,
 };
