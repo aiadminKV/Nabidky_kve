@@ -425,12 +425,27 @@ CYSY = ohebný/měkký silový kabel (H05VV-F), prodává se v rolích nebo bubn
 - Jističe se v katalogu značí jako PL6-BAMP/POLES nebo podobně
 - Vždy přidej jak katalogový kód, tak popisný text pro lepší vyhledávání
 
+## KATALOGOVÉ SYNONYMA — různí výrobci pojmenovávají produkty jinak
+- "rámeček jednonásobný" = "JEDNORAMECEK" (ABB, Tango, Time) — přidej obě varianty
+- "rámeček dvojnásobný" = "DVOJRAMECEK" — přidej obě
+- "trojrámeček" = "TROJRAMECEK" — přidej obě
+- "zásuvka s uzemněním" = "ZASUVKA CLON." nebo "ZASUVKA KOMPLET"
+
+## PREFEROVANÝ VÝROBCE/ŘADA (pokud uveden v dodatečném kontextu)
+Pokud je zadán preferovaný výrobce nebo řada, přidej do reformulace:
+- Konkrétní katalogový kód řady (např. PL7-C2/1, S201-B16, Tango)
+- Jméno výrobce zkratkou i plně (ABB, Eaton, Schneider)
+- Reformuluj PRIMÁRNĚ pro tuto kombinaci výrobce+řada+parametry
+
 Vrať plain text — jen přeformulovaný název.`;
 
-async function reformulate(name: string, instruction?: string | null): Promise<string> {
-  const userContent = instruction
-    ? `${name}\n\nDodatečný kontext: ${instruction}`
-    : name;
+async function reformulate(name: string, instruction?: string | null, groupContext?: GroupContext): Promise<string> {
+  const parts: string[] = [name];
+  if (instruction) parts.push(`Dodatečný kontext: ${instruction}`);
+  if (groupContext?.preferredManufacturer) {
+    parts.push(`Preferovaný výrobce: ${groupContext.preferredManufacturer}${groupContext.preferredLine ? `, řada: ${groupContext.preferredLine}` : ""}`);
+  }
+  const userContent = parts.join("\n\n");
 
   const content = await chatComplete({ system: REFORM_PROMPT, user: userContent });
   return content?.trim() ?? name;
@@ -479,6 +494,8 @@ function mergeWithExisting(
         ex.cosine_similarity,
         c.cosine_similarity,
       );
+      // Pokud nový zdroj je "exact", zachovej tuto informaci i po merge
+      if (c.source === "exact") ex.source = "exact";
     } else {
       map.set(c.sku, c);
     }
@@ -522,14 +539,28 @@ NEHODNOTÍŠ cenu, sklad, výrobce, dostupnost. Hodnotíš POUZE:
 1. Je to STEJNÝ TYP produktu? (jistič, kabel, vodič, svítidlo, zásuvka...)
 2. Sedí KLÍČOVÉ PARAMETRY? (proud, póly, průřez, počet žil, IP, wattáž...)
 
+## ABSOLUTNÍ PRIORITA — Exact code match
+Pokud kandidát má foundByExactCode = true:
+→ AUTOMATICKY zařaď do shortlistu s matchScore: 97
+→ Název nemusí vizuálně odpovídat poptávce — produkt byl nalezen přesnou shodou kódu/EAN/SKU
+→ Toto pravidlo má přednost před všemi ostatními pravidly níže
+
+## TVRDÉ PARAMETRY — Bezpečnostně kritické (platí pro všechny ostatní kandidáty)
+Tyto parametry musí PŘESNĚ sedět. Pokud nesedí → matchScore < 40 → kandidát se do shortlistu NEDOSTANE:
+- Průřez vodiče/kabelu (mm²): 1x95mm² ≠ 1x240mm², 3x2,5 ≠ 3x1,5
+- Počet pólů/žil: 3-pólový ≠ 5-pólový, 3×2,5 ≠ 5×2,5
+- Počet párů (datové kabely): 3×2×0,8 ≠ 2×2×0,8
+- Třída odolnosti (ohebné trubky): 320N ≠ 720N, 450N ≠ 750N
+
 ## Vstup
 Dostaneš originální název z poptávky a seznam raw kandidátů z vyhledávání. VĚTŠINA kandidátů je šum — to je normální.
 
 ## Postup
-1. Urči TYP produktu z poptávky.
-2. Projdi kandidáty a vyřaď všechny jiného typu.
-3. U zbylých ověř shodu klíčových parametrů.
-4. Vrať SHORTLIST max 8 nejlepších seřazený od nejlepšího.
+1. Zkontroluj foundByExactCode — přidej automaticky s matchScore 97.
+2. Urči TYP produktu z poptávky.
+3. Projdi zbylé kandidáty a vyřaď všechny jiného typu.
+4. U zbylých ověř shodu TVRDÝCH PARAMETRŮ — nesedí → matchScore < 40 → vyřaď.
+5. Vrať SHORTLIST max 8 nejlepších seřazený od nejlepšího.
 
 ## POZOR — běžné záměny (NIKDY nezaměňuj!)
 - jistič ≠ pojistka (jiný produkt!)
@@ -610,6 +641,7 @@ async function matchCandidates(
     category_line: c.category_line,
     similarity: Math.round(c.cosine_similarity * 1000) / 1000,
     source: c.source,
+    foundByExactCode: c.source === "exact",
   }));
 
   const payload: Record<string, unknown> = { originalName, candidates: top20 };
@@ -697,12 +729,27 @@ Vrať VÝHRADNĚ JSON:
   "priceNote": "varování o ceně nebo null"
 }
 
+## ABSOLUTNÍ PRIORITA — Exact code match
+Pokud vybraný kandidát má foundByExactCode = true:
+→ VŽDY ho vyber, confidence: 99, matchType: "match"
+→ Ostatní pravidla (cena, výrobce, varianta) se NEAPLIKUJÍ
+→ reasoning: "Produkt nalezen přesnou shodou kódu/EAN/SKU."
+
+## Varianta bez specifikace — KRITICKÉ PRAVIDLO
+Pokud shortlist obsahuje více kandidátů lišících se POUZE v atributu, který poptávka NESPECIFIKUJE (barva, typ žíly J/O, typ balení BUBEN/BUBEN NEVRATNÝ, délka kusu, třída odolnosti 320N/720N, RAL kód):
+→ NEVOLÍŠ libovolnou variantu
+→ matchType: "multiple", selectedSku: null, confidence: 0
+→ reasoning: vysvětli které atributy jsou nespecifikované a jaké varianty existují
+
+Výjimka: pokud poptávka atribut EXPLICITNĚ specifikuje (např. "ŽLUTOZELENÁ", "typ J", "BUBEN NEVRATNÝ") → vyber správnou variantu, matchType: "match".
+
 ## matchType v kontextu selectoru
+- foundByExactCode = true → "match", confidence: 99
+- Více variant bez specifikace → "multiple", selectedSku: null, confidence: 0
 - matchScore ≥ 85 → "match"
 - matchScore 60-84 → "uncertain"
 - matchScore < 60 → "alternative"
-- Prázdný shortlist → "not_found"
-- Více kandidátů se stejným skóre → "multiple" (ale stále vyber jednoho)`;
+- Prázdný shortlist → "not_found"`;
 
 async function selectProduct(
   originalName: string,
@@ -737,6 +784,7 @@ async function selectProduct(
       is_stock_item: c?.is_stock_item ?? false,
       has_stock: c?.has_stock ?? false,
       unit: c?.unit ?? null,
+      foundByExactCode: c?.source === "exact",
     };
   });
 
@@ -896,7 +944,7 @@ export async function searchPipelineForItem(
 
     // Reformulation + code extraction run in parallel
     const [reformulated, aiExtractedCodes] = await Promise.all([
-      reformulate(normalizedName, item.instruction),
+      reformulate(normalizedName, item.instruction, groupContext),
       extractProductCodes(normalizedName),
     ]);
     onDebug?.({ position, step: "reformulation", data: { original: normalizedName, reformulated } });
@@ -947,11 +995,21 @@ export async function searchPipelineForItem(
       },
     });
 
-    // Dual semantic search (parallel, unfiltered)
-    const [rawResults, refResults] = await Promise.all([
+    // Dual semantic search (parallel, unfiltered) + optional manufacturer boost
+    const mfrQuery = groupContext?.preferredManufacturer
+      ? `${groupContext.preferredManufacturer}${groupContext.preferredLine ? ` ${groupContext.preferredLine}` : ""} ${normalizedName}`
+      : null;
+    const mfrEmbPromise = mfrQuery ? generateQueryEmbedding(mfrQuery) : Promise.resolve(null);
+
+    const [rawResults, refResults, mfrEmb] = await Promise.all([
       searchProductsSemantic(rawEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD),
       searchProductsSemantic(refEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD),
+      mfrEmbPromise,
     ]);
+
+    const mfrResults = mfrEmb
+      ? await searchProductsSemantic(mfrEmb, MAX_RESULTS_SEMANTIC, SIM_THRESHOLD)
+      : [];
     onDebug?.({
       position, step: "search",
       data: {
@@ -969,6 +1027,10 @@ export async function searchPipelineForItem(
     // Extra prioritní kandidáti z výrobcových katalogových čísel
     if (extraExactResults.length > 0) {
       merged = mergeWithExisting(merged, exactToMerged(extraExactResults));
+    }
+    // Manufacturer-boosted search — přidá výsledky pro preferovaného výrobce/řadu
+    if (mfrResults.length > 0) {
+      merged = mergeWithExisting(merged, mfrResults.map((r) => ({ ...r, source: "reformulated" as const })));
     }
     const preFilterCount = merged.length;
     merged = applyStockPostFilter(merged, preferences);
@@ -1075,7 +1137,7 @@ export async function searchPipelineForItem(
       reformulatedQuery: reformulated,
       pipelineMs,
       exactLookupAttempted: true,
-      exactLookupFound: exactResults.length > 0,
+      exactLookupFound: exactResults.length > 0 || extraExactResults.length > 0,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Pipeline failed";
