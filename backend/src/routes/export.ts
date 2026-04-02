@@ -1,6 +1,24 @@
 import { Hono } from "hono";
 import ExcelJS from "exceljs";
+import nodemailer from "nodemailer";
 import { authMiddleware } from "../middleware/auth.js";
+
+function createMailTransporter() {
+  const host = process.env.SAP_SMTP_HOST;
+  const user = process.env.SAP_MAIL_FROM;
+  const pass = process.env.SAP_MAIL_PASSWORD;
+
+  if (!host || !user || !pass) {
+    throw new Error("SAP mail configuration missing (SAP_SMTP_HOST, SAP_MAIL_FROM, SAP_MAIL_PASSWORD)");
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+  });
+}
 
 const exportRouter = new Hono();
 
@@ -322,6 +340,130 @@ exportRouter.post("/export/sap-xlsx", authMiddleware, async (c) => {
   c.header("Content-Disposition", `attachment; filename="kv-sap-${Date.now()}.xlsx"`);
 
   return c.body(buffer as ArrayBuffer);
+});
+
+/**
+ * POST /export/send-sap-email
+ * Generate SAP XLSX and send it via email to faktury@kvelektro.cz.
+ * Body: { header, items, offerTitle? }
+ */
+exportRouter.post("/export/send-sap-email", authMiddleware, async (c) => {
+  const { header, items, offerTitle, creatorEmail } = await c.req.json<{
+    header?: Partial<OfferHeader>;
+    items: ExportItem[];
+    offerTitle?: string;
+    creatorEmail?: string;
+  }>();
+
+  if (!items?.length) {
+    return c.json({ error: "Items are required" }, 400);
+  }
+
+  const h: OfferHeader = {
+    customerId: header?.customerId ?? "",
+    customerIco: header?.customerIco ?? "",
+    customerName: header?.customerName ?? "",
+    deliveryDate: header?.deliveryDate ?? "",
+    offerName: header?.offerName ?? "",
+    phone: header?.phone ?? "",
+    email: header?.email ?? "",
+    specialAction: header?.specialAction ?? "",
+    branch: header?.branch ?? "",
+    deliveryAddress: header?.deliveryAddress ?? "",
+  };
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.created = new Date();
+  workbook.creator = "KV Elektro – Správce nabídek";
+
+  const sheet = workbook.addWorksheet("SAP");
+
+  const allHeaders = [
+    "ID", "IC", "Nazev", "termin_dodani", "Nazev_zakazky_cislo",
+    "tel", "email", "spec_akce", "pobocka", "adresa_dodani",
+    "creator",
+    "ARTICLES", "ARTIKL", "PRODID", "POPIS", "MNOZSTVI", "MJ",
+  ];
+  const headerRow = sheet.addRow(allHeaders);
+  applyHeaderStyle(headerRow, allHeaders.length);
+
+  items.forEach((item, idx) => {
+    const customerCells = idx === 0
+      ? [
+          h.customerId, h.customerIco, h.customerName, h.deliveryDate,
+          h.offerName, h.phone, h.email, h.specialAction, h.branch, h.deliveryAddress,
+          creatorEmail ?? "",
+          items.length,
+        ]
+      : ["", "", "", "", "", "", "", "", "", "", "", ""];
+
+    const row = sheet.addRow([
+      ...customerCells,
+      item.sku ?? "",
+      item.manufacturerCode ?? "",
+      item.originalName,
+      item.quantity ?? "",
+      item.unit ?? "ks",
+    ]);
+    row.font = CELL_FONT;
+  });
+
+  sheet.getColumn(1).width = 12;
+  sheet.getColumn(2).width = 14;
+  sheet.getColumn(3).width = 22;
+  sheet.getColumn(4).width = 14;
+  sheet.getColumn(5).width = 28;
+  sheet.getColumn(6).width = 14;
+  sheet.getColumn(7).width = 24;
+  sheet.getColumn(8).width = 12;
+  sheet.getColumn(9).width = 14;
+  sheet.getColumn(10).width = 30;
+  sheet.getColumn(11).width = 26;  // creator
+  sheet.getColumn(12).width = 10;  // ARTICLES
+  sheet.getColumn(13).width = 14;  // ARTIKL
+  sheet.getColumn(14).width = 18;  // PRODID
+  sheet.getColumn(15).width = 45;  // POPIS
+  sheet.getColumn(16).width = 12;  // MNOZSTVI
+  sheet.getColumn(17).width = 8;   // MJ
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  const identifier = offerTitle?.trim() || h.offerName?.trim() || h.customerId || Date.now().toString();
+  const subject = `offer_data_bridge ${identifier}`;
+  const filename = `${Date.now()}.xlsx`;
+
+  try {
+    const transporter = createMailTransporter();
+    const mailFrom = process.env.SAP_MAIL_FROM!;
+    const mailTo = process.env.SAP_MAIL_TO ?? "faktury@kvelektro.cz";
+    await transporter.sendMail({
+      from: `"Data Bridge Pro" <${mailFrom}>`,
+      to: mailTo,
+      subject,
+      text: [
+        `Nabídka pro SAP: ${identifier}`,
+        ``,
+        `Zákazník:       ${h.customerName || "—"}`,
+        `IČO:            ${h.customerIco || "—"}`,
+        `Termín dodání:  ${h.deliveryDate || "—"}`,
+        `Počet položek:  ${items.length}`,
+        ``,
+        `Soubor je přiložen jako příloha.`,
+      ].join("\n"),
+      attachments: [
+        {
+          filename,
+          content: Buffer.from(buffer as ArrayBuffer),
+          contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      ],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Odeslání emailu selhalo";
+    return c.json({ error: message }, 500);
+  }
+
+  return c.json({ ok: true, subject, filename });
 });
 
 export { exportRouter };

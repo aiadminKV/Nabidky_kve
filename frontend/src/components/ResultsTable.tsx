@@ -22,6 +22,24 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+const MATCH_METHOD_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
+  ean: { label: "EAN", icon: "⊟", color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
+  code: { label: "Kód", icon: "⊞", color: "text-blue-600 bg-blue-50 border-blue-200" },
+  semantic: { label: "AI", icon: "◎", color: "text-violet-600 bg-violet-50 border-violet-200" },
+};
+
+function MatchMethodBadge({ method }: { method?: string }) {
+  if (!method || method === "not_found") return null;
+  const cfg = MATCH_METHOD_CONFIG[method];
+  if (!cfg) return null;
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium border ${cfg.color}`} title={`Nalezeno: ${cfg.label}`}>
+      <span>{cfg.icon}</span>
+      <span>{cfg.label}</span>
+    </span>
+  );
+}
+
 const MATCH_TYPE_LABELS: Record<string, string> = {
   match: "Přesná shoda",
   uncertain: "Nejistá shoda",
@@ -259,7 +277,7 @@ interface ResultsTableProps {
   changedPositions?: Set<number>;
   onItemClick: (item: OfferItem) => void;
   onExport: () => void;
-  onExportSap: () => void;
+  onSendSap: () => void;
   onReset: () => void;
   onProcessNotFound: () => void;
   onProcessAgain?: () => void;
@@ -279,7 +297,7 @@ export function ResultsTable({
   changedPositions,
   onItemClick,
   onExport,
-  onExportSap,
+  onSendSap,
   onReset,
   onProcessNotFound,
   onProcessAgain,
@@ -440,14 +458,14 @@ export function ResultsTable({
               Export
             </button>
             <button
-              onClick={onExportSap}
+              onClick={onSendSap}
               disabled={isSearching || items.length === 0}
               className={primaryButtonClass}
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
               </svg>
-              Export SAP
+              Odeslat do SAP
             </button>
           </div>
         </div>
@@ -616,7 +634,7 @@ export function ResultsTable({
                         <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                         <span className="text-sm text-kv-dark truncate">
-                          {item.product?.name ?? (isCurrentlySearching ? "" : "—")}
+                          {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
                         </span>
                         {item.product && !isCurrentlySearching && (
                           <ProductInfoPopover product={item.product} />
@@ -624,6 +642,7 @@ export function ResultsTable({
                         </div>
                       {item.product && !isCurrentlySearching && (
                         <div className="flex items-center gap-2 mt-0.5">
+                          <MatchMethodBadge method={item.matchMethod} />
                           {item.product.manufacturer && (
                             <span className="text-xs text-kv-gray-400">{item.product.manufacturer}</span>
                           )}
@@ -634,6 +653,14 @@ export function ResultsTable({
                             </span>
                           )}
                           <StockBadge product={item.product} token={token} />
+                        </div>
+                      )}
+                      {!item.product && !isCurrentlySearching && item.matchMethod && item.matchMethod !== "not_found" && (
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <MatchMethodBadge method={item.matchMethod} />
+                          {item.candidates.length > 0 && (
+                            <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
+                          )}
                         </div>
                       )}
                       {item.priceNote && !isCurrentlySearching && (

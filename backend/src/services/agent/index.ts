@@ -1,7 +1,8 @@
 import { Agent, tool } from "@openai/agents";
 import { z } from "zod";
 import { fetchProductsBySkus, getCategoryTree } from "../search.js";
-import { searchPipelineForItem, type PipelineResult, type SearchPreferences } from "../searchPipeline.js";
+import { type PipelineResult, type SearchPreferences } from "../searchPipeline.js";
+import { searchPipelineV2ForItem } from "../searchPipelineV2.js";
 import { generateSessionId, buildBatchSummaryEntry } from "../searchLogger.js";
 
 export const parserAgent = new Agent({
@@ -230,7 +231,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPre
       await onEvent({ type: "tool_activity", tool: "search_product", data: { status: "start", query } });
       await onEvent({ type: "debug", tool: "search_product", data: { query, unit, quantity } });
       try {
-        const result = await searchPipelineForItem(
+        const result = await searchPipelineV2ForItem(
           { name: query, unit, quantity },
           0,
           (entry) => {
@@ -481,7 +482,7 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPre
 
         const item = items[idx];
         try {
-          const result = await searchPipelineForItem(
+          const result = await searchPipelineV2ForItem(
             { name: item.name, unit: item.unit, quantity: item.quantity, instruction: item.instruction },
             idx,
             (entry) => {

@@ -5,6 +5,7 @@ import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
 import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
 import { searchPipelineForItem, searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
@@ -143,7 +144,7 @@ agent.post("/agent/search", authMiddleware, async (c) => {
             }
             await stream.write(sseEvent("set_matched", setResult));
           } else {
-            const result = await searchPipelineForItem(item, idx, onDebug, searchPreferences, gc);
+            const result = await searchPipelineV2ForItem(item, idx, onDebug, searchPreferences, gc);
             matchResults.push(result);
             await stream.write(sseEvent("item_matched", result));
           }
@@ -290,7 +291,7 @@ agent.post("/agent/search-semantic", authMiddleware, async (c) => {
 
         const item = items[idx];
         try {
-          const result = await searchPipelineForItem(item, item.position, onDebug, searchPreferences);
+          const result = await searchPipelineV2ForItem(item, item.position, onDebug, searchPreferences);
           matchResults.push(result);
           await stream.write(sseEvent("item_matched", result));
         } catch {
@@ -597,7 +598,7 @@ agent.post("/agent/standalone-search", authMiddleware, async (c) => {
     try {
       await stream.write(sseEvent("status", { phase: "searching" }));
 
-      const result = await searchPipelineForItem(
+      const result = await searchPipelineV2ForItem(
         { name: query.trim(), unit: null, quantity: null },
         0,
         undefined,

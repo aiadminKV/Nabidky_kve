@@ -16,6 +16,7 @@ export interface ProductResult {
   is_stock_item: boolean;
   has_stock: boolean;
   removed_at: string | null;
+  description: string | null;
 }
 
 export interface FulltextResult extends ProductResult {
@@ -163,7 +164,7 @@ export async function fetchProductsBySkus(
     .select(`
       id, sku, name, unit, supplier_name,
       category_main, category_sub, category_line,
-      is_stock_item, removed_at
+      is_stock_item, removed_at, description
     `)
     .in("sku", skus);
 

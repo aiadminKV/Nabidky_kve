@@ -736,7 +736,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             changedPositions={changedPositions}
             onItemClick={handleItemClick}
             onExport={handleExport}
-            onExportSap={handleExportSap}
+            onSendSap={() => {}}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
             isSearchingSemantic={isSearchingSemantic}

@@ -15,7 +15,7 @@ import { SearchPreferencesBar } from "@/components/SearchPreferencesBar";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
-  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx,
+  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx, sendSapEmail,
   getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan,
   type ChatMessageDTO, type SaveOfferItemInput, type SearchPlan,
 } from "@/lib/api";
@@ -62,6 +62,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const [exportWarning, setExportWarning] = useState<number | null>(null);
   const [isHeaderModalOpen, setIsHeaderModalOpen] = useState(false);
+  const [sapEmailModal, setSapEmailModal] = useState<"closed" | "confirm" | "sending" | "success" | "error">("closed");
+  const [sapEmailError, setSapEmailError] = useState<string>("");
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
     customerId: "",
     customerIco: "",
@@ -1300,6 +1302,28 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     }
   }, [offerItems, doExportSap]);
 
+  const handleSendToSap = useCallback(() => {
+    setSapEmailModal("confirm");
+  }, []);
+
+  const doSendToSap = useCallback(async () => {
+    setSapEmailModal("sending");
+    try {
+      const token = await getToken();
+      await sendSapEmail(buildExportItems(), offerHeader, offerTitle, email, token);
+      setSapEmailModal("success");
+      try {
+        const t2 = await getToken();
+        await updateOffer(offerId, { status: "exported" }, t2);
+      } catch {
+        // best-effort
+      }
+    } catch (err) {
+      setSapEmailError(err instanceof Error ? err.message : "Odeslání selhalo.");
+      setSapEmailModal("error");
+    }
+  }, [buildExportItems, offerHeader, offerTitle, offerId, getToken]);
+
   const handleExportConfirm = useCallback(() => {
     setExportWarning(null);
     doExport();
@@ -1442,7 +1466,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             changedPositions={changedPositions}
             onItemClick={handleItemClick}
             onExport={handleExport}
-            onExportSap={handleExportSap}
+            onSendSap={handleSendToSap}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
             onProcessAgain={handleProcessAgain}
@@ -1548,6 +1572,122 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               </button>
             </div>
             <OfferHeaderForm header={offerHeader} onChange={handleHeaderChange} forceExpanded getToken={getToken} />
+          </div>
+        </div>
+      )}
+
+      {/* SAP email – confirmation modal */}
+      {sapEmailModal === "confirm" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-kv-navy/10">
+              <svg className="h-6 w-6 text-kv-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+              </svg>
+            </div>
+            <h3 className="text-base font-bold text-kv-dark">Odeslat nabídku do SAP</h3>
+            <p className="mt-1 text-sm text-kv-gray-400">
+              Nabídka bude odeslána e-mailem na <span className="font-medium text-kv-dark">faktury@kvelektro.cz</span>. Před odesláním zkontrolujte, že jsou všechny položky v pořádku.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3">
+              <input
+                id="sap-confirm-check"
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-kv-navy"
+                onChange={(e) => {
+                  const btn = document.getElementById("sap-send-btn") as HTMLButtonElement | null;
+                  if (btn) btn.disabled = !e.target.checked;
+                }}
+              />
+              <span className="text-sm text-kv-gray-600">
+                Zkontroloval/a jsem všechny položky nabídky a souhlasím s odesláním.
+              </span>
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setSapEmailModal("closed")}
+                className="rounded-xl px-4 py-2.5 text-sm font-medium text-kv-gray-500 transition-colors hover:bg-kv-gray-100"
+              >
+                Zrušit
+              </button>
+              <button
+                id="sap-send-btn"
+                disabled
+                onClick={doSendToSap}
+                className="rounded-xl bg-kv-navy px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:bg-kv-navy/80 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Odeslat do SAP
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SAP email – sending state */}
+      {sapEmailModal === "sending" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
+          <div className="w-full max-w-xs overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6 text-center">
+            <div className="mb-4 mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-kv-navy/10">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-kv-gray-300 border-t-kv-navy" />
+            </div>
+            <h3 className="text-base font-bold text-kv-dark">Odesílám…</h3>
+            <p className="mt-1 text-sm text-kv-gray-400">Probíhá odeslání nabídky do SAP.</p>
+          </div>
+        </div>
+      )}
+
+      {/* SAP email – success */}
+      {sapEmailModal === "success" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
+              <svg className="h-6 w-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+              </svg>
+            </div>
+            <h3 className="text-base font-bold text-kv-dark">Nabídka odeslána</h3>
+            <p className="mt-1 text-sm text-kv-gray-400">
+              Nabídka byla úspěšně odeslána na <span className="font-medium text-kv-dark">faktury@kvelektro.cz</span>.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={() => setSapEmailModal("closed")}
+                className="rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:bg-emerald-600"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SAP email – error */}
+      {sapEmailModal === "error" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+              <svg className="h-6 w-6 text-kv-red" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+              </svg>
+            </div>
+            <h3 className="text-base font-bold text-kv-dark">Odeslání selhalo</h3>
+            <p className="mt-1 text-sm text-kv-gray-400">
+              {sapEmailError || "Nabídku se nepodařilo odeslat. Zkuste to prosím znovu."}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setSapEmailModal("closed")}
+                className="rounded-xl px-4 py-2.5 text-sm font-medium text-kv-gray-500 transition-colors hover:bg-kv-gray-100"
+              >
+                Zavřít
+              </button>
+              <button
+                onClick={doSendToSap}
+                className="rounded-xl bg-kv-red px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:bg-kv-red-dark"
+              >
+                Zkusit znovu
+              </button>
+            </div>
           </div>
         </div>
       )}

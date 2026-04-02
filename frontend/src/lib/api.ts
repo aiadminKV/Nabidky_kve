@@ -172,6 +172,29 @@ export async function downloadSapXlsx(
   return res.blob();
 }
 
+/** Send SAP XLSX export via email to faktury@kvelektro.cz (REST) */
+export async function sendSapEmail(
+  items: Array<Record<string, unknown>>,
+  header: OfferHeader,
+  offerTitle: string,
+  creatorEmail: string,
+  token: string,
+): Promise<{ ok: true; subject: string; filename: string }> {
+  const res = await fetch(`${BACKEND_URL}/export/send-sap-email`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ items, header, offerTitle, creatorEmail }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Odeslání selhalo: ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Upload a pricelist Excel file (REST) */
 export async function uploadPricelist(
   file: File,

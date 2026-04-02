@@ -183,7 +183,11 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
         {/* Candidates list */}
         <div className="flex-1 overflow-y-auto custom-scrollbar px-6 py-3">
           <p className="mb-2 text-xs font-semibold text-kv-navy">
-            {searchResults.length > 0 ? `Výsledky (${searchResults.length})` : "Kandidáti"}
+            {searchResults.length > 0
+              ? `Výsledky (${searchResults.length})`
+              : item.matchType === "multiple" && item.candidates.length > 0
+                ? `Technicky správní kandidáti (${item.candidates.length}) — vyberte`
+                : "Kandidáti"}
           </p>
           <div className="space-y-1.5">
             {displayCandidates.map((product, idx) => (

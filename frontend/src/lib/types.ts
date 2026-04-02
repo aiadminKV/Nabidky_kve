@@ -123,6 +123,8 @@ export interface OfferItem {
   extraColumns?: Record<string, string>;
   exactLookupAttempted?: boolean;
   exactLookupFound?: boolean;
+  /** How the product was matched (V2 pipeline) */
+  matchMethod?: "ean" | "code" | "semantic" | "not_found";
   /** If this item is a component of a set, this points to the parent item's itemId */
   parentItemId?: string | null;
   /** Component role within a set (mechanism, cover, frame, etc.) */

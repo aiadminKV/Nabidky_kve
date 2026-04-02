@@ -64,18 +64,17 @@ async function main() {
   let rows: ProductRow[];
 
   if (STALE) {
-    // Products that have an embedding but whose name has changed since it was generated
+    // Products flagged as stale via embedding_stale = true
     ({ rows } = await queryClient.query<ProductRow>(`
       SELECT p.id, p.sku, p.name, p.supplier_name, p.search_hints,
              p.category_main, p.category_sub, p.category_line, p.description
       FROM products_v2 p
-      JOIN product_embeddings_v2 e ON e.product_id = p.id
-      WHERE p.removed_at IS NULL
+      WHERE p.embedding_stale = true
+        AND p.removed_at IS NULL
         AND p.name IS NOT NULL AND p.name != ''
-        AND split_part(e.embedding_text, E'\\n', 1) != p.name
       ORDER BY p.id
     `));
-    console.log(`  Stale embeddings (name changed): ${fmt(rows.length)}`);
+    console.log(`  Stale embeddings (embedding_stale flag): ${fmt(rows.length)}`);
   } else {
     // Products with no embedding at all
     ({ rows } = await queryClient.query<ProductRow>(`
@@ -137,6 +136,7 @@ async function main() {
         await writeClient.connect();
         try {
           await writeClient.query("BEGIN");
+          const batchIds: number[] = [];
           for (let j = 0; j < batch.length; j++) {
             const p = batch[j];
             const vec = JSON.stringify(resp.data[j].embedding);
@@ -148,7 +148,13 @@ async function main() {
                  embedding_text = EXCLUDED.embedding_text, model_version = EXCLUDED.model_version`,
               [p.id, p.sku, vec, texts[j]],
             );
+            batchIds.push(p.id);
           }
+          // Clear stale flag atomically in the same transaction
+          await writeClient.query(
+            `UPDATE products_v2 SET embedding_stale = false WHERE id = ANY($1)`,
+            [batchIds],
+          );
           await writeClient.query("COMMIT");
         } catch (pgErr) {
           await writeClient.query("ROLLBACK").catch(() => {});
