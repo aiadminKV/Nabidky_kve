@@ -59,6 +59,8 @@ const T_REMOVED = parseInt(process.env.SYNC_THRESHOLD_REMOVED || "500");
 const T_NAME_CHANGES = parseInt(process.env.SYNC_THRESHOLD_NAMES || "5000");
 const T_REEMBED = parseInt(process.env.SYNC_THRESHOLD_REEMBED || "5000");
 const T_ROW_DROP_PCT = parseFloat(process.env.SYNC_THRESHOLD_ROW_DROP_PCT || "5");
+// Description threshold is strict — daily changes should be tens/hundreds, not thousands
+const T_DESCRIPTION_CHANGES = parseInt(process.env.SYNC_THRESHOLD_DESCRIPTIONS || "500");
 
 // ─── CLI Args ────────────────────────────────────────────────────────
 
@@ -80,6 +82,7 @@ interface ProductSnapshot {
   unit: string;
   ean: string;
   idnlf: string;
+  description: string;
   stockHash: string;
   stocks: Record<string, number>;
 }
@@ -96,6 +99,7 @@ interface DiffResult {
   stockChanges: string[];
   matklChanges: Array<{ matnr: string; old: string; new_: string }>;
   dispoChanges: Array<{ matnr: string; old: string; new_: string }>;
+  descriptionChanges: Array<{ matnr: string; old: string; new_: string }>;
   newWhColumns: string[];
 }
 
@@ -229,7 +233,8 @@ async function loadDbSnapshot(): Promise<{
         COALESCE(p.dispo, '')                   AS dispo,
         COALESCE(p.unit, '')                    AS unit,
         COALESCE(p.source_ean_raw, '')          AS ean,
-        COALESCE(p.source_idnlf_raw, '')        AS idnlf
+        COALESCE(p.source_idnlf_raw, '')        AS idnlf,
+        COALESCE(p.description, '')             AS description
       FROM products_v2 p
       LEFT JOIN product_price_v2 pr ON pr.product_id = p.id
       WHERE p.removed_at IS NULL
@@ -240,7 +245,7 @@ async function loadDbSnapshot(): Promise<{
       const res = await client.query<{
         source_matnr: string; name: string; supplier: string;
         current_price: string | null; status_p: string; status_s: string;
-        matkl: string; dispo: string; unit: string; ean: string; idnlf: string;
+        matkl: string; dispo: string; unit: string; ean: string; idnlf: string; description: string;
       }>("FETCH 10000 FROM prod_cur");
       if (res.rows.length === 0) break;
 
@@ -256,6 +261,7 @@ async function loadDbSnapshot(): Promise<{
           unit: row.unit,
           ean: row.ean,
           idnlf: row.idnlf,
+          description: row.description ?? "",
           stockHash: "",
           stocks: {},
         });
@@ -376,6 +382,7 @@ async function parseCsvToMap(filePath: string, label: string): Promise<{
       unit: trim(row.MEINS),
       ean: trim(row.EAN),
       idnlf: trim(row.IDNLF),
+      description: trim(row.LONGTEXT ?? ""),
       stockHash: computeStockHash(row, whColumns),
       stocks: parseStocks(row, whColumns),
     });
@@ -413,6 +420,7 @@ function computeDiff(
     stockChanges: [],
     matklChanges: [],
     dispoChanges: [],
+    descriptionChanges: [],
     newWhColumns: newWh.filter((w) => !oldWh.includes(w)),
   };
 
@@ -436,6 +444,8 @@ function computeDiff(
       result.matklChanges.push({ matnr, old: old.matkl, new_: nw.matkl });
     if (old.dispo !== nw.dispo)
       result.dispoChanges.push({ matnr, old: old.dispo, new_: nw.dispo });
+    if (old.description !== nw.description)
+      result.descriptionChanges.push({ matnr, old: old.description, new_: nw.description });
   }
 
   for (const matnr of oldMap.keys()) {
@@ -460,6 +470,7 @@ function printDiffReport(d: DiffResult): void {
   console.log(`  Stock changes:      ${fmt(d.stockChanges.length).padStart(8)}  (${pct(d.stockChanges.length, total)})`);
   console.log(`  Category changes:   ${fmt(d.matklChanges.length).padStart(8)}`);
   console.log(`  DISPO changes:      ${fmt(d.dispoChanges.length).padStart(8)}`);
+  console.log(`  Description changes:${fmt(d.descriptionChanges.length).padStart(8)}`);
   if (d.newWhColumns.length > 0) console.log(`  New WH_ columns:    ${d.newWhColumns.join(", ")}`);
 
   const reembed = d.newProducts.length + d.nameChanges.length +
@@ -479,8 +490,10 @@ function checkThresholds(d: DiffResult): string[] {
     violations.push(`Removed products (${fmt(d.removedProducts.length)}) exceeds threshold (${fmt(T_REMOVED)})`);
   if (d.nameChanges.length > T_NAME_CHANGES)
     violations.push(`Name changes (${fmt(d.nameChanges.length)}) exceeds threshold (${fmt(T_NAME_CHANGES)})`);
+  if (d.descriptionChanges.length > T_DESCRIPTION_CHANGES)
+    violations.push(`Description changes (${fmt(d.descriptionChanges.length)}) exceeds threshold (${fmt(T_DESCRIPTION_CHANGES)}) — use --force for initial bulk migration`);
 
-  const reembed = d.newProducts.length + d.nameChanges.length + d.supplierChanges.length;
+  const reembed = d.newProducts.length + d.nameChanges.length + d.supplierChanges.length + d.descriptionChanges.length;
   if (reembed > T_REEMBED)
     violations.push(`Re-embed count (${fmt(reembed)}) exceeds threshold (${fmt(T_REEMBED)})`);
 
@@ -1101,6 +1114,12 @@ function collectMetadataUpdates(
     const patch = getOrCreate(c.matnr);
     patch.dispo = c.new_ || null;
     patch.is_stock_item = isStockItem(c.new_);
+  }
+
+  for (const c of diff.descriptionChanges) {
+    const patch = getOrCreate(c.matnr);
+    patch.description = c.new_ || null;
+    patch.embedding_stale = true;
   }
 
   return updates;
