@@ -318,6 +318,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
   return [
     {
       type: "function",
+      strict: true,
       name: "search_products",
       description: "Vyhledej produkty v katalogu podle textového dotazu. Vrací až 20 nejrelevantnějších produktů. Kombinuje sémantické a fulltextové vyhledávání.",
       parameters: {
@@ -330,6 +331,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
     },
     {
       type: "function",
+      strict: true,
       name: "lookup_exact",
       description: "Přesné vyhledání podle SKU, EAN nebo objednacího kódu výrobce. Použij pokud máš konkrétní kód produktu.",
       parameters: {
@@ -342,6 +344,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
     },
     {
       type: "function",
+      strict: true,
       name: "get_product_detail",
       description: "Získej detailní informace o produktu podle SKU. Použij pro ověření parametrů kandidáta.",
       parameters: {
@@ -354,6 +357,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
     },
     {
       type: "function",
+      strict: true,
       name: "search_by_category",
       description: "Vyhledej produkty v katalogu s filtrem na konkrétní kategorii. Použij pokud obecné vyhledávání vrací příliš široké výsledky — například pro pohybové detektory, čidla, svítidla, spínače, zásuvky. Nejdřív získej seznam kategorií přes list_categories.",
       parameters: {
@@ -367,6 +371,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
     },
     {
       type: "function",
+      strict: true,
       name: "list_categories",
       description: "Vrať strom kategorií produktů v katalogu. Každá kategorie má kód, název a úroveň. Použij pro nalezení správné kategorie produktu.",
       parameters: {
@@ -376,6 +381,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
     },
     {
       type: "function",
+      strict: true,
       name: "submit_result",
       description: "Odevzdej finální výsledek výběru produktu. MUSÍ být voláno jako poslední akce.",
       parameters: {
@@ -718,7 +724,7 @@ export async function searchPipelineV2ForItem(
   item: ParsedItem,
   position: number,
   onDebug?: PipelineDebugFn,
-  preferences?: SearchPreferences,
+  _preferences?: SearchPreferences,
   groupContext?: GroupContext,
 ): Promise<PipelineResultV2> {
   const t0 = Date.now();
@@ -819,12 +825,12 @@ export async function searchPipelineV2ForItem(
     const selectedInfo: ProductForChecker | null = selectedProduct
       ? { sku: selectedProduct.sku, name: selectedProduct.name, description: selectedProduct.description }
       : null;
-    const alternativeInfos: ProductForChecker[] = agentResult.alternativeSkus
-      .map((sku) => {
-        const p = productMap.get(sku);
-        return p ? { sku: p.sku, name: p.name, description: p.description } : null;
-      })
-      .filter((p): p is ProductForChecker => p !== null);
+    const alternativeInfos: ProductForChecker[] = agentResult.alternativeSkus.flatMap((sku) => {
+      const p = productMap.get(sku);
+      return p
+        ? [{ sku: p.sku, name: p.name, description: p.description ?? null }]
+        : [];
+    });
 
     // ── Checker ───────────────────────────────────────────
     if (agentResult.matchType !== "not_found" && (selectedProduct || alternativeInfos.length > 0)) {

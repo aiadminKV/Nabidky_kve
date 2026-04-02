@@ -4,7 +4,7 @@ import { run, user } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
 import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
-import { searchPipelineForItem, searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
+import { searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
 import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
