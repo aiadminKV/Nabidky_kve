@@ -21,8 +21,8 @@ RUN cd scripts && npm ci
 COPY scripts/ ./scripts/
 
 # Lookup CSVs for category/status resolution
-COPY data-model/sync/new_name_of_category.csv ./scripts/data-model/sync/new_name_of_category.csv
-COPY data-model/sync/new_status_type.csv ./scripts/data-model/sync/new_status_type.csv
+COPY docs/data-model/sync/new_name_of_category.csv ./scripts/data-model/sync/new_name_of_category.csv
+COPY docs/data-model/sync/new_status_type.csv ./scripts/data-model/sync/new_status_type.csv
 
 # Sync data dir — ephemeral temp storage, no volume needed
 RUN mkdir -p /tmp/sync
