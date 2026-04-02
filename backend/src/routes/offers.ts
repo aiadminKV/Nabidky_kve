@@ -121,12 +121,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
       review_status,
       extra_columns,
       parent_item_id,
-      component_role,
-      products:matched_product_id (
-        id, sku, name, name_secondary, unit, price, ean,
-        manufacturer_code, manufacturer, category, subcategory,
-        sub_subcategory, eshop_url
-      )
+      component_role
     `)
     .eq("offer_id", offerId)
     .order("position", { ascending: true });
@@ -143,7 +138,7 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
     quantity: item.quantity ? Number(item.quantity) : null,
     matchType: item.match_type ?? "not_found",
     confidence: item.confidence ? Number(item.confidence) : 0,
-    product: item.products ?? null,
+    product: null,
     candidates: item.candidates ?? [],
     confirmed: item.confirmed ?? false,
     reviewStatus: item.review_status ?? null,
