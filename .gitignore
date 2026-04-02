@@ -49,3 +49,5 @@ data-model/sync/*.bak
 # Allow small lookup CSVs needed for Docker build
 !data-model/sync/new_name_of_category.csv
 !data-model/sync/new_status_type.csv
+!docs/data-model/sync/new_name_of_category.csv
+!docs/data-model/sync/new_status_type.csv
