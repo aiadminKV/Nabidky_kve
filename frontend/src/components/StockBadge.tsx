@@ -94,15 +94,15 @@ export function StockBadge({ product, token }: StockBadgeProps) {
 
   // ── Skladovka / Neskladovka badge ────────────────────────
   const stockItemBadge = isStockItem ? (
-    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-      <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+    <span className="inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+      <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
       </svg>
       Skladovka
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 rounded-full border border-kv-gray-200 bg-kv-gray-50 px-2 py-0.5 text-[10px] font-semibold text-kv-gray-400">
-      <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <span className="inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border border-kv-gray-200 bg-kv-gray-50 px-2 py-0.5 text-[10px] font-semibold text-kv-gray-400">
+      <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
       </svg>
       Neskladovka
@@ -194,7 +194,7 @@ export function StockBadge({ product, token }: StockBadgeProps) {
         type="button"
         onClick={handleStockClick}
         title="Klikněte pro detail zásoby po pobočkách"
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${availabilityConfig.cls}`}
+        className={`inline-flex min-w-[96px] justify-center items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${availabilityConfig.cls}`}
       >
         <span className={`h-1.5 w-1.5 rounded-full ${availabilityConfig.dot}`} />
         {availabilityConfig.label}

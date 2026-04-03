@@ -1010,6 +1010,8 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               quantity: item.quantity,
               unit: item.unit,
               product: selectedProduct,
+              // Filter confirmed product out of candidates so it's not double-counted in "N var." badge
+              candidates: (i.candidates ?? []).filter((c) => c.sku !== selectedProduct?.sku),
               confirmed: true,
               reviewStatus: "reviewed" as const,
               matchType: "match" as const,

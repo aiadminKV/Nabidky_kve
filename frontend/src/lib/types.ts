@@ -42,6 +42,7 @@ export interface Product {
   unit: string | null;
   ean: string | null;
   name_secondary?: string | null;
+  description?: string | null;
   price?: number | null;
   subcategory?: string | null;
   sub_subcategory?: string | null;
@@ -71,8 +72,8 @@ export interface ParsedItem {
 
 /** Pre-search configuration that flows into the pipeline */
 export interface SearchPreferences {
-  /** "stock_items_only" = only is_stock_item=true products; "any" = whole catalogue */
-  stockFilter: "any" | "in_stock" | "stock_items_only";
+  /** stock filter: "any" = no filter, "in_stock" = must have stock, "stock_items_only" = is_stock_item=true (no stock check), "stock_items_in_stock" = is_stock_item=true AND has stock */
+  stockFilter: "any" | "in_stock" | "stock_items_only" | "stock_items_in_stock";
   /** Branch code for branch-specific availability filter, null = any branch */
   branchFilter: string | null;
 }

@@ -662,7 +662,14 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setOfferItems((prev) =>
       prev.map((i) =>
         i.itemId === item.itemId
-          ? { ...i, product: selectedProduct, confirmed: true, matchType: "match" as const, confidence: 100 }
+          ? {
+              ...i,
+              product: selectedProduct,
+              candidates: (i.candidates ?? []).filter((c) => c.sku !== selectedProduct?.sku),
+              confirmed: true,
+              matchType: "match" as const,
+              confidence: 100,
+            }
           : i,
       ),
     );

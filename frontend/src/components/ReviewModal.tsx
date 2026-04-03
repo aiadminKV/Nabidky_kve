@@ -8,6 +8,24 @@ import { ProductInfoPopover, getStatusVariant, STATUS_LABELS } from "./ProductIn
 import { ProductThumbnail } from "./ProductThumbnail";
 import { StockBadge } from "./StockBadge";
 
+const MATCH_METHOD_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
+  ean:      { label: "EAN",  icon: "⊟", color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
+  code:     { label: "Kód",  icon: "⊞", color: "text-blue-600 bg-blue-50 border-blue-200" },
+  semantic: { label: "AI",   icon: "◎", color: "text-violet-600 bg-violet-50 border-violet-200" },
+};
+
+function MatchMethodBadge({ method }: { method?: string | null }) {
+  if (!method || method === "not_found") return null;
+  const cfg = MATCH_METHOD_CONFIG[method];
+  if (!cfg) return null;
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium border ${cfg.color}`} title={`Nalezeno: ${cfg.label}`}>
+      <span>{cfg.icon}</span>
+      <span>{cfg.label}</span>
+    </span>
+  );
+}
+
 function CopySkuButton({ sku }: { sku: string }) {
   const [copied, setCopied] = useState(false);
   const copy = useCallback((e: React.MouseEvent) => {
@@ -172,7 +190,6 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
     return candidates;
   }, [searchResults, item.candidates, item.product]);
 
-  // SKU of the AI-picked product (to show "AI výběr" badge in the list)
   const aiPickedSku = item.product?.sku ?? null;
 
   return (
@@ -315,9 +332,7 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
                 className={`w-full rounded-xl border px-3 py-2.5 text-left transition-all ${
                   selectedProduct?.sku === product.sku
                     ? "border-kv-navy bg-kv-navy/5 ring-1 ring-kv-navy/20"
-                    : isAiPick
-                      ? "border-kv-gray-300 bg-kv-gray-50/50 hover:border-kv-gray-400 hover:bg-kv-gray-50"
-                      : "border-kv-gray-200 hover:border-kv-gray-300 hover:bg-kv-gray-50"
+                    : "border-kv-gray-200 hover:border-kv-gray-300 hover:bg-kv-gray-50"
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -328,18 +343,13 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
                     <div className="flex items-center gap-1.5">
                       <p className="text-sm font-medium text-kv-dark truncate">{product.name}</p>
                       <ProductInfoPopover product={product} size="md" />
-                      {isAiPick && (
-                        <span className="shrink-0 inline-flex items-center gap-1 rounded-full border border-kv-navy/20 bg-kv-navy/8 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-kv-navy">
-                          <svg className="h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-                          </svg>
-                          AI výběr
-                        </span>
-                      )}
                     </div>
-                    {product.name_secondary && (
-                      <p className="text-xs text-kv-gray-400 truncate">{product.name_secondary}</p>
-                    )}
+                    <p
+                      className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
+                      title={product.description ?? undefined}
+                    >
+                      {product.description ?? ""}
+                    </p>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-kv-gray-400">
                       <span className="flex items-center gap-0.5">
                         <span className="font-mono">{product.sku}</span>

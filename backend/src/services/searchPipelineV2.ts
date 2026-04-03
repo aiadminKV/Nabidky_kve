@@ -34,7 +34,7 @@ const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 
 // ── Stock cascade types ────────────────────────────────────
 
-export type StockLevel = "branch" | "stock_item" | "in_stock" | "any";
+export type StockLevel = "branch" | "stock_item" | "stock_item_in_stock" | "in_stock" | "any";
 
 export interface StockContext {
   requestedLevel: StockLevel;
@@ -331,6 +331,7 @@ IGNORUJ cenu, sklad, dostupnost. Tvůj JEDINÝ úkol je najít technicky správn
 function prefsToStockLevel(prefs?: SearchPreferences): StockLevel {
   if (!prefs || prefs.stockFilter === "any") return "any";
   if (prefs.stockFilter === "in_stock") return "in_stock";
+  if (prefs.stockFilter === "stock_items_in_stock") return "stock_item_in_stock";
   if (prefs.branchFilter) return "branch";
   return "stock_item";
 }
@@ -339,6 +340,7 @@ function stockLevelToOpts(level: StockLevel, branchFilter?: string | null): Stoc
   switch (level) {
     case "branch": return { stockItemOnly: true, branchCodeFilter: branchFilter ?? undefined };
     case "stock_item": return { stockItemOnly: true };
+    case "stock_item_in_stock": return { stockItemOnly: true, inStockOnly: true };
     case "in_stock": return { inStockOnly: true };
     case "any": return undefined;
   }
@@ -750,6 +752,7 @@ Rozvinutý název pro vyhledání: "${preprocessed.reformulated}"`;
 function slimProduct(p: ProductResult): Partial<ProductResult> {
   return {
     id: p.id, sku: p.sku, name: p.name, unit: p.unit,
+    description: p.description ?? null,
     current_price: p.current_price, supplier_name: p.supplier_name,
     category_main: p.category_main, category_sub: p.category_sub,
     category_line: p.category_line, is_stock_item: p.is_stock_item,
@@ -824,7 +827,7 @@ export async function searchPipelineV2ForItem(
 
     const allCodes = [...new Set([...(item.extraLookupCodes ?? []), ...preprocessed.productCodes])];
 
-    // ── Layer 1: EAN Lookup ───────────────────────────────
+    // ── Layer 1: EAN Lookup — 100% match, no checker needed ─
     const eanProduct = await tryEanLookup(preprocessed.eans, onDebug, position);
     if (eanProduct) {
       onDebug?.({ position, step: "ean_match", data: { sku: eanProduct.sku, name: eanProduct.name } });
@@ -837,7 +840,8 @@ export async function searchPipelineV2ForItem(
       );
     }
 
-    // ── Layer 2: Code Lookup + Checker ────────────────────
+    // ── Layer 2: Code Lookup + AI Checker ────────────────
+    // tryCodeLookup internally runs the checker — returns null if checker rejects
     const codeProduct = await tryCodeLookup(
       allCodes, item.name, item.unit, item.quantity,
       onDebug, position,

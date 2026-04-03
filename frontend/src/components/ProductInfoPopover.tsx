@@ -7,6 +7,7 @@ interface ProductInfo {
   name: string;
   sku?: string;
   name_secondary?: string | null;
+  description?: string | null;
   manufacturer_code?: string | null;
   manufacturer?: string | null;
   category?: string | null;
@@ -290,8 +291,15 @@ export function ProductInfoPopover({ product, size = "sm" }: ProductInfoPopoverP
             {/* Header */}
             <div className="border-b border-kv-gray-100 px-4 py-3">
               <p className="text-sm font-semibold leading-snug text-kv-gray-900">{product.name}</p>
-              {product.name_secondary && (
-                <p className="mt-0.5 text-xs leading-snug text-kv-gray-500">{product.name_secondary}</p>
+              {product.description && (
+                <p
+                  className="mt-0.5 truncate text-xs leading-snug text-kv-gray-500 whitespace-nowrap overflow-hidden"
+                  title={product.description}
+                >
+                  {product.description.length > 70
+                    ? product.description.slice(0, 70) + "…"
+                    : product.description}
+                </p>
               )}
             </div>
 

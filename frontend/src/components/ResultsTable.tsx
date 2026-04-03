@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback } from "react";
-import type { OfferItem, StockContext } from "@/lib/types";
+import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover, isProductStatusProblematic, getStatusVariant, STATUS_LABELS } from "./ProductInfoPopover";
 import { ProductThumbnail } from "./ProductThumbnail";
@@ -40,38 +40,6 @@ function MatchMethodBadge({ method }: { method?: string }) {
   );
 }
 
-const STOCK_FALLBACK_CONFIG: Record<string, { label: string; tooltip: string; color: string }> = {
-  stock_item: {
-    label: "Jinde",
-    tooltip: "Nalezeno jako skladová položka, ale mimo vaši pobočku",
-    color: "text-amber-600 bg-amber-50 border-amber-200",
-  },
-  in_stock: {
-    label: "Není skladovka",
-    tooltip: "Nalezeno skladem, ale nejde o skladovou položku",
-    color: "text-orange-600 bg-orange-50 border-orange-200",
-  },
-  any: {
-    label: "Není skladem",
-    tooltip: "Nalezeno v katalogu, aktuálně není skladem ani skladovou položkou",
-    color: "text-red-600 bg-red-50 border-red-200",
-  },
-};
-
-function StockFallbackBadge({ stockContext }: { stockContext?: StockContext }) {
-  if (!stockContext?.fallbackUsed) return null;
-  const cfg = STOCK_FALLBACK_CONFIG[stockContext.effectiveLevel];
-  if (!cfg) return null;
-  return (
-    <span
-      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium border ${cfg.color}`}
-      title={cfg.tooltip}
-    >
-      <span>⚠</span>
-      <span>{cfg.label}</span>
-    </span>
-  );
-}
 
 const MATCH_TYPE_LABELS: Record<string, string> = {
   match: "Přesná shoda",
@@ -670,21 +638,34 @@ export function ResultsTable({
                             <ProductInfoPopover product={item.product} />
                           )}
                         </div>
+                        {/* Description — always rendered to keep consistent row height */}
+                        <p
+                          className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
+                          title={item.product?.description ?? undefined}
+                        >
+                          {item.product?.description ?? ""}
+                        </p>
                       {item.product && !isCurrentlySearching && (
                         <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
                           <MatchMethodBadge method={item.matchMethod} />
-                          <StockFallbackBadge stockContext={item.stockContext} />
-                          {item.candidates.length > 0 && (
-                            <span
-                              title={`${item.candidates.length} alternativních kandidátů — klikněte pro výběr`}
-                              className="inline-flex items-center gap-0.5 rounded-full border border-kv-gray-200 bg-kv-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-kv-gray-500"
-                            >
-                              <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
-                              </svg>
-                              {item.candidates.length} alt.
-                            </span>
-                          )}
+                          {(() => {
+                            const total = item.candidates.length + 1;
+                            return (
+                              <span
+                                title={`${total} ${total === 1 ? "varianta" : "varianty/variant"} celkem — klikněte pro výběr`}
+                                className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                  total > 1
+                                    ? "border-orange-200 bg-orange-50 text-orange-600"
+                                    : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400"
+                                }`}
+                              >
+                                <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+                                </svg>
+                                {total} var.
+                              </span>
+                            );
+                          })()}
                           {item.product.sku && (
                             <span className="flex items-center gap-0.5">
                               <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
@@ -692,7 +673,7 @@ export function ResultsTable({
                             </span>
                           )}
                           {item.product.current_price != null && (
-                            <span className="text-xs font-medium text-kv-dark tabular-nums">
+                            <span className="min-w-[72px] text-xs font-semibold text-kv-dark tabular-nums">
                               {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
                               {item.product.unit && <span className="ml-0.5 font-normal text-kv-gray-400">/{item.product.unit}</span>}
                             </span>
@@ -716,10 +697,10 @@ export function ResultsTable({
                             const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
                             return (
                               <span
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
+                                className={`inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
                                 title={item.product!.status_sales_text ?? code}
                               >
-                                <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
                                 {label}
                               </span>
                             );
@@ -729,7 +710,6 @@ export function ResultsTable({
                       {!item.product && !isCurrentlySearching && item.matchMethod && item.matchMethod !== "not_found" && (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <MatchMethodBadge method={item.matchMethod} />
-                          <StockFallbackBadge stockContext={item.stockContext} />
                           {item.candidates.length > 0 && (
                             <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
                           )}
