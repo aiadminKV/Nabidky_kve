@@ -5,7 +5,7 @@ import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
 import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
 import { searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
-import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import { searchPipelineV2ForItem, type StockLevel } from "../services/searchPipelineV2.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
@@ -130,20 +130,9 @@ agent.post("/agent/search", authMiddleware, async (c) => {
         const item = items[idx]!;
         const gc = groupContexts?.[idx];
         try {
-          if (item.isSet && item.setHint) {
-            const setResult = await searchPipelineForSet(
-              { ...item, isSet: true, setHint: item.setHint },
-              idx,
-              item.parentItemId ?? `set-${idx}`,
-              onDebug,
-              searchPreferences,
-              gc,
-            );
-            for (const comp of setResult.components) {
-              matchResults.push(comp.result);
-            }
-            await stream.write(sseEvent("set_matched", setResult));
-          } else {
+          // Set decomposition temporarily disabled — all items go through V2 pipeline directly.
+          // if (item.isSet && item.setHint) { ... }
+          {
             const result = await searchPipelineV2ForItem(item, idx, onDebug, searchPreferences, gc);
             matchResults.push(result);
             await stream.write(sseEvent("item_matched", result));
@@ -238,106 +227,6 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
 
 // Old agent-based search functions removed.
 // Batch search now uses the deterministic pipeline (searchPipelineForItem)
-// which handles reformulation, dual semantic search, merge, AI evaluation,
-// and refinement in a single pass per item.
-
-/**
- * POST /agent/search-semantic
- * Re-runs the full search pipeline for not_found items (backward compat).
- * The pipeline already includes semantic search, so this is equivalent to /agent/search.
- */
-agent.post("/agent/search-semantic", authMiddleware, async (c) => {
-  const { items, searchPreferences } = await c.req.json<{ items: Array<ParsedItem & { position: number }>; searchPreferences?: SearchPreferences }>();
-
-  if (!items?.length) {
-    return c.json({ error: "Items array is required" }, 400);
-  }
-
-  c.header("Content-Type", "text/event-stream");
-  c.header("Cache-Control", "no-cache");
-  c.header("Connection", "keep-alive");
-  c.header("X-Accel-Buffering", "no");
-
-  const CONCURRENCY = 30;
-
-  return streamText(c, async (stream) => {
-    const sessionId = generateSessionId();
-    const batchT0 = Date.now();
-    const matchResults: PipelineResult[] = [];
-
-    const onDebug: PipelineDebugFn = ({ position, step, data }) => {
-      stream
-        .write(
-          sseEvent("debug", {
-            ts: Date.now(),
-            type: "search_trace",
-            data: { event: step, position, ...(data as object) },
-          }),
-        )
-        .catch(() => {});
-    };
-
-    try {
-      await stream.write(sseEvent("status", { phase: "searching_semantic", total: items.length }));
-
-      for (const item of items) {
-        await stream.write(sseEvent("item_searching", { position: item.position, name: item.name }));
-      }
-
-      let cursor = 0;
-      const runNext = async (): Promise<void> => {
-        const idx = cursor++;
-        if (idx >= items.length) return;
-
-        const item = items[idx];
-        try {
-          const result = await searchPipelineV2ForItem(item, item.position, onDebug, searchPreferences);
-          matchResults.push(result);
-          await stream.write(sseEvent("item_matched", result));
-        } catch {
-          const failResult: PipelineResult = {
-            position: item.position,
-            originalName: item.name,
-            unit: item.unit,
-            quantity: item.quantity,
-            matchType: "not_found",
-            confidence: 0,
-            product: null,
-            candidates: [],
-            reasoning: "Pipeline failed.",
-            priceNote: null,
-            reformulatedQuery: "",
-            pipelineMs: 0,
-            exactLookupAttempted: false,
-            exactLookupFound: false,
-          };
-          matchResults.push(failResult);
-          await stream.write(sseEvent("item_matched", failResult));
-        }
-
-        await runNext();
-      };
-
-      const workers = Array.from(
-        { length: Math.min(CONCURRENCY, items.length) },
-        () => runNext(),
-      );
-      await Promise.all(workers);
-
-      stream
-        .write(
-          sseEvent("debug", buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0)),
-        )
-        .catch(() => {});
-      await stream.write(sseEvent("status", { phase: "review" }));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      await stream.write(sseEvent("error", { message: msg }));
-    }
-
-    await stream.write("data: [DONE]\n\n");
-  });
-});
 
 /**
  * POST /agent/search-plan
@@ -612,6 +501,51 @@ agent.post("/agent/standalone-search", authMiddleware, async (c) => {
       await stream.write(sseEvent("error", { message: msg }));
     }
 
+    await stream.write("data: [DONE]\n\n");
+  });
+});
+
+/**
+ * POST /agent/search-item
+ * Re-search a single item with optional stockLevelOverride.
+ * Used when user manually relaxes the stock filter for a specific item.
+ */
+agent.post("/agent/search-item", authMiddleware, async (c) => {
+  const { item, searchPreferences, groupContext, stockLevelOverride } = await c.req.json<{
+    item: { name: string; unit?: string | null; quantity?: number | null };
+    searchPreferences?: SearchPreferences;
+    groupContext?: GroupContext;
+    stockLevelOverride?: StockLevel;
+  }>();
+
+  if (!item?.name?.trim()) {
+    return c.json({ error: "Item name is required" }, 400);
+  }
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+  c.header("X-Accel-Buffering", "no");
+
+  return streamText(c, async (stream) => {
+    try {
+      await stream.write(sseEvent("status", { phase: "searching" }));
+
+      const result = await searchPipelineV2ForItem(
+        { name: item.name.trim(), unit: item.unit ?? null, quantity: item.quantity ?? null },
+        0,
+        undefined,
+        searchPreferences,
+        groupContext,
+        stockLevelOverride,
+      );
+
+      await stream.write(sseEvent("item_matched", result));
+      await stream.write(sseEvent("status", { phase: "done" }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Search failed";
+      await stream.write(sseEvent("error", { message: msg }));
+    }
     await stream.write("data: [DONE]\n\n");
   });
 });

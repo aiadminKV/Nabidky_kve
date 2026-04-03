@@ -22,20 +22,14 @@ const MAX_REFINEMENTS = 2;
 
 // ── Types ──────────────────────────────────────────────────
 
-export type OfferType = "vyberko" | "realizace";
-
 export interface SearchPreferences {
-  offerType: OfferType;
   stockFilter: "any" | "in_stock" | "stock_items_only";
   branchFilter: string | null;
-  priceStrategy: "lowest" | "standard";
 }
 
 export const DEFAULT_PREFERENCES: SearchPreferences = {
-  offerType: "realizace",
   stockFilter: "any",
   branchFilter: null,
-  priceStrategy: "standard",
 };
 
 export interface ParsedItem {
@@ -220,12 +214,6 @@ export async function createSearchPlan(
     })),
   };
 
-  if (preferences) {
-    payload.offerContext =
-      preferences.offerType === "vyberko"
-        ? "Typ nabídky: VÝBĚRKO — preferuj nejnižší cenu."
-        : "Typ nabídky: REALIZACE — preferuj standardní dodavatele a dostupnost.";
-  }
 
   const content = await chatComplete({
     system: PLANNING_PROMPT,

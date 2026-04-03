@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState, useCallback } from "react";
-import type { OfferItem } from "@/lib/types";
+import type { OfferItem, StockContext } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
-import { ProductInfoPopover } from "./ProductInfoPopover";
+import { ProductInfoPopover, isProductStatusProblematic, getStatusVariant, STATUS_LABELS } from "./ProductInfoPopover";
 import { ProductThumbnail } from "./ProductThumbnail";
 import { StockBadge } from "./StockBadge";
 import {
@@ -35,6 +35,39 @@ function MatchMethodBadge({ method }: { method?: string }) {
   return (
     <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium border ${cfg.color}`} title={`Nalezeno: ${cfg.label}`}>
       <span>{cfg.icon}</span>
+      <span>{cfg.label}</span>
+    </span>
+  );
+}
+
+const STOCK_FALLBACK_CONFIG: Record<string, { label: string; tooltip: string; color: string }> = {
+  stock_item: {
+    label: "Jinde",
+    tooltip: "Nalezeno jako skladová položka, ale mimo vaši pobočku",
+    color: "text-amber-600 bg-amber-50 border-amber-200",
+  },
+  in_stock: {
+    label: "Není skladovka",
+    tooltip: "Nalezeno skladem, ale nejde o skladovou položku",
+    color: "text-orange-600 bg-orange-50 border-orange-200",
+  },
+  any: {
+    label: "Není skladem",
+    tooltip: "Nalezeno v katalogu, aktuálně není skladem ani skladovou položkou",
+    color: "text-red-600 bg-red-50 border-red-200",
+  },
+};
+
+function StockFallbackBadge({ stockContext }: { stockContext?: StockContext }) {
+  if (!stockContext?.fallbackUsed) return null;
+  const cfg = STOCK_FALLBACK_CONFIG[stockContext.effectiveLevel];
+  if (!cfg) return null;
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium border ${cfg.color}`}
+      title={cfg.tooltip}
+    >
+      <span>⚠</span>
       <span>{cfg.label}</span>
     </span>
   );
@@ -283,7 +316,6 @@ interface ResultsTableProps {
   onProcessAgain?: () => void;
   onAddItem?: () => void;
   onDeleteItem?: (itemId: string) => void;
-  onSearchItem?: (item: OfferItem) => void;
   onReorder?: (reorderedItems: OfferItem[]) => void;
   onInsertAt?: (afterPosition: number) => void;
   isSearchingSemantic: boolean;
@@ -303,7 +335,6 @@ export function ResultsTable({
   onProcessAgain,
   onAddItem,
   onDeleteItem,
-  onSearchItem,
   onReorder,
   onInsertAt,
   isSearchingSemantic,
@@ -544,6 +575,7 @@ export function ResultsTable({
           </button>
         )}
       <div className="h-full overflow-y-auto overflow-x-auto custom-scrollbar pb-24">
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <table className="w-full">
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
@@ -561,7 +593,6 @@ export function ResultsTable({
               <th className="px-4 py-2.5 text-center text-xs font-medium text-kv-gray-400 w-20">Akce</th>
             </tr>
           </thead>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={items.map((i) => i.itemId)} strategy={verticalListSortingStrategy}>
           <tbody className="divide-y divide-kv-gray-100">
             {items.map((item, idx) => {
@@ -626,25 +657,33 @@ export function ResultsTable({
                     </td>
                   ))}
                   <td className="px-4 py-2.5">
-                    <div className="max-w-[300px]">
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                         {item.product && !isCurrentlySearching && (
                           <ProductThumbnail sku={item.product.sku} name={item.product.name} size="sm" />
                         )}
-                        <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                        <span className="text-sm text-kv-dark truncate">
-                          {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
-                        </span>
-                        {item.product && !isCurrentlySearching && (
-                          <ProductInfoPopover product={item.product} />
-                        )}
+                        <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm text-kv-dark truncate">
+                            {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
+                          </span>
+                          {item.product && !isCurrentlySearching && (
+                            <ProductInfoPopover product={item.product} />
+                          )}
                         </div>
                       {item.product && !isCurrentlySearching && (
-                        <div className="flex items-center gap-2 mt-0.5">
+                        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
                           <MatchMethodBadge method={item.matchMethod} />
-                          {item.product.manufacturer && (
-                            <span className="text-xs text-kv-gray-400">{item.product.manufacturer}</span>
+                          <StockFallbackBadge stockContext={item.stockContext} />
+                          {item.candidates.length > 0 && (
+                            <span
+                              title={`${item.candidates.length} alternativních kandidátů — klikněte pro výběr`}
+                              className="inline-flex items-center gap-0.5 rounded-full border border-kv-gray-200 bg-kv-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-kv-gray-500"
+                            >
+                              <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+                              </svg>
+                              {item.candidates.length} alt.
+                            </span>
                           )}
                           {item.product.sku && (
                             <span className="flex items-center gap-0.5">
@@ -652,12 +691,45 @@ export function ResultsTable({
                               <CopySkuButton sku={item.product.sku} />
                             </span>
                           )}
+                          {item.product.current_price != null && (
+                            <span className="text-xs font-medium text-kv-dark tabular-nums">
+                              {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
+                              {item.product.unit && <span className="ml-0.5 font-normal text-kv-gray-400">/{item.product.unit}</span>}
+                            </span>
+                          )}
                           <StockBadge product={item.product} token={token} />
+                          {item.product.status_sales_code && (() => {
+                            const code = item.product!.status_sales_code!;
+                            const variant = getStatusVariant(code);
+                            const variantClass = {
+                              green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+                              amber: "border-amber-200 bg-amber-50 text-amber-700",
+                              red:   "border-red-200 bg-red-50 text-red-600",
+                              gray:  "border-kv-gray-200 bg-kv-gray-100 text-kv-gray-500",
+                            }[variant];
+                            const dotClass = {
+                              green: "bg-emerald-500",
+                              amber: "bg-amber-400",
+                              red: "bg-red-500",
+                              gray: "bg-kv-gray-300",
+                            }[variant];
+                            const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
+                            return (
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
+                                title={item.product!.status_sales_text ?? code}
+                              >
+                                <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+                                {label}
+                              </span>
+                            );
+                          })()}
                         </div>
                       )}
                       {!item.product && !isCurrentlySearching && item.matchMethod && item.matchMethod !== "not_found" && (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <MatchMethodBadge method={item.matchMethod} />
+                          <StockFallbackBadge stockContext={item.stockContext} />
                           {item.candidates.length > 0 && (
                             <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
                           )}
@@ -680,9 +752,8 @@ export function ResultsTable({
                           <span>EAN/kód nenalezen v katalogu</span>
                         </div>
                       )}
-                        </div>{/* end min-w-0 */}
-                      </div>{/* end flex items-center gap-2 */}
-                    </div>
+                        </div>{/* end min-w-0 flex-1 */}
+                    </div>{/* end flex items-center gap-2 */}
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <StatusBadge
@@ -695,13 +766,13 @@ export function ResultsTable({
                       {!isCurrentlySearching && (
                         <ReasoningPopover item={item} />
                       )}
-                      {!isCurrentlySearching && onSearchItem && (
+                      {!isCurrentlySearching && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onSearchItem(item);
+                            onItemClick(item);
                           }}
-                          title="Vyhledat znovu"
+                          title="Vyhledat znovu / otevřít"
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-kv-gray-300 transition-all hover:bg-kv-navy/10 hover:text-kv-navy"
                         >
                           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -730,8 +801,8 @@ export function ResultsTable({
             })}
           </tbody>
             </SortableContext>
-          </DndContext>
         </table>
+        </DndContext>
       </div>
       </div>
 

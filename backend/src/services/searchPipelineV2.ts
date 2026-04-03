@@ -18,6 +18,7 @@ import {
   type ExactResult,
   type ProductResult,
   type CategoryTreeEntry,
+  type StockFilterOptions,
 } from "./search.js";
 import type {
   ParsedItem,
@@ -31,10 +32,21 @@ const MODEL = "gpt-5.4-mini";
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 
-// ── Extended result with matchMethod ──────────────────────
+// ── Stock cascade types ────────────────────────────────────
+
+export type StockLevel = "branch" | "stock_item" | "in_stock" | "any";
+
+export interface StockContext {
+  requestedLevel: StockLevel;
+  effectiveLevel: StockLevel;
+  fallbackUsed: boolean;
+}
+
+// ── Extended result with matchMethod + stockContext ────────
 
 export interface PipelineResultV2 extends PipelineResult {
   matchMethod: "ean" | "code" | "semantic" | "not_found";
+  stockContext?: StockContext;
 }
 
 // ── Phase 0: AI Preprocessing ─────────────────────────────
@@ -314,6 +326,24 @@ IGNORUJ cenu, sklad, dostupnost. Tvůj JEDINÝ úkol je najít technicky správn
 - Buď efektivní, obvykle stačí 2 až 4 volání nástrojů.
 - VŽDY ukonči práci voláním submit_result.`;
 
+// ── Stock level helpers ────────────────────────────────────
+
+function prefsToStockLevel(prefs?: SearchPreferences): StockLevel {
+  if (!prefs || prefs.stockFilter === "any") return "any";
+  if (prefs.stockFilter === "in_stock") return "in_stock";
+  if (prefs.branchFilter) return "branch";
+  return "stock_item";
+}
+
+function stockLevelToOpts(level: StockLevel, branchFilter?: string | null): StockFilterOptions | undefined {
+  switch (level) {
+    case "branch": return { stockItemOnly: true, branchCodeFilter: branchFilter ?? undefined };
+    case "stock_item": return { stockItemOnly: true };
+    case "in_stock": return { inStockOnly: true };
+    case "any": return undefined;
+  }
+}
+
 function buildTools(): OpenAI.Responses.Tool[] {
   return [
     {
@@ -327,6 +357,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
           query: { type: "string", description: "Textový dotaz pro vyhledání (název produktu, typ, parametry)" },
         },
         required: ["query"],
+        additionalProperties: false,
       },
     },
     {
@@ -340,6 +371,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
           code: { type: "string", description: "SKU, EAN, nebo objednací kód produktu" },
         },
         required: ["code"],
+        additionalProperties: false,
       },
     },
     {
@@ -353,6 +385,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
           sku: { type: "string", description: "SKU produktu" },
         },
         required: ["sku"],
+        additionalProperties: false,
       },
     },
     {
@@ -367,6 +400,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
           category: { type: "string", description: "Kód kategorie pro filtraci (např. '4070802' pro Vypínače)" },
         },
         required: ["query", "category"],
+        additionalProperties: false,
       },
     },
     {
@@ -377,6 +411,7 @@ function buildTools(): OpenAI.Responses.Tool[] {
       parameters: {
         type: "object",
         properties: {},
+        additionalProperties: false,
       },
     },
     {
@@ -396,7 +431,8 @@ function buildTools(): OpenAI.Responses.Tool[] {
             description: "SKU dalších technicky správných kandidátů (max 10)",
           },
         },
-        required: ["selectedSku", "matchType", "confidence", "reasoning"],
+        required: ["selectedSku", "matchType", "confidence", "reasoning", "alternativeSkus"],
+        additionalProperties: false,
       },
     },
   ];
@@ -407,12 +443,13 @@ function buildTools(): OpenAI.Responses.Tool[] {
 async function handleSearchProducts(
   query: string,
   manufacturerFilter?: string | null,
+  stockOpts?: StockFilterOptions,
 ): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
   const embedding = await generateQueryEmbedding(query);
 
   const [semanticResults, fulltextResults] = await Promise.all([
-    searchProductsSemantic(embedding, 20, 0.35, undefined, manufacturerFilter ?? undefined).catch(() => [] as SemanticResult[]),
-    searchProductsFulltext(query, 20, undefined, manufacturerFilter ?? undefined).catch(() => [] as FulltextResult[]),
+    searchProductsSemantic(embedding, 20, 0.35, undefined, manufacturerFilter ?? undefined, undefined, stockOpts).catch(() => [] as SemanticResult[]),
+    searchProductsFulltext(query, 20, undefined, manufacturerFilter ?? undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]),
   ]);
 
   const seen = new Set<string>();
@@ -472,12 +509,13 @@ async function handleSearchByCategory(
   query: string,
   category: string,
   manufacturerFilter?: string | null,
+  stockOpts?: StockFilterOptions,
 ): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
   const embedding = await generateQueryEmbedding(query);
 
   const [semanticResults, fulltextResults] = await Promise.all([
-    searchProductsSemantic(embedding, 15, 0.3, undefined, manufacturerFilter ?? undefined, category).catch(() => [] as SemanticResult[]),
-    searchProductsFulltext(query, 15, undefined, manufacturerFilter ?? undefined, category).catch(() => [] as FulltextResult[]),
+    searchProductsSemantic(embedding, 15, 0.3, undefined, manufacturerFilter ?? undefined, category, stockOpts).catch(() => [] as SemanticResult[]),
+    searchProductsFulltext(query, 15, undefined, manufacturerFilter ?? undefined, category, stockOpts).catch(() => [] as FulltextResult[]),
   ]);
 
   const seen = new Set<string>();
@@ -554,6 +592,7 @@ async function runReactAgent(
   onDebug?: PipelineDebugFn,
   position?: number,
   retryFeedback?: string,
+  stockOpts?: StockFilterOptions,
 ): Promise<AgentResult> {
   let userMessage = `Poptávka: "${demand}"
 Množství: ${quantity ?? "?"} ${unit ?? "ks"}
@@ -605,7 +644,7 @@ Rozvinutý název pro vyhledání: "${preprocessed.reformulated}"`;
 
       switch (fc.name) {
         case "search_products": {
-          const searchResult = await handleSearchProducts(args.query, manufacturerFilter);
+          const searchResult = await handleSearchProducts(args.query, manufacturerFilter, stockOpts);
           result = searchResult.resultJson;
           for (const p of searchResult.products) {
             if (!allProducts.some((c) => c.sku === p.sku)) {
@@ -630,7 +669,7 @@ Rozvinutý název pro vyhledání: "${preprocessed.reformulated}"`;
           break;
         }
         case "search_by_category": {
-          const catResult = await handleSearchByCategory(args.query, args.category, manufacturerFilter);
+          const catResult = await handleSearchByCategory(args.query, args.category, manufacturerFilter, stockOpts);
           result = catResult.resultJson;
           for (const p of catResult.products) {
             if (!allProducts.some((c) => c.sku === p.sku)) {
@@ -715,6 +754,11 @@ function slimProduct(p: ProductResult): Partial<ProductResult> {
     category_main: p.category_main, category_sub: p.category_sub,
     category_line: p.category_line, is_stock_item: p.is_stock_item,
     has_stock: p.has_stock, removed_at: p.removed_at,
+    status_purchase_code: p.status_purchase_code ?? null,
+    status_purchase_text: p.status_purchase_text ?? null,
+    status_sales_code: p.status_sales_code ?? null,
+    status_sales_text: p.status_sales_text ?? null,
+    dispo: p.dispo ?? null,
   };
 }
 
@@ -724,8 +768,9 @@ export async function searchPipelineV2ForItem(
   item: ParsedItem,
   position: number,
   onDebug?: PipelineDebugFn,
-  _preferences?: SearchPreferences,
+  preferences?: SearchPreferences,
   groupContext?: GroupContext,
+  stockLevelOverride?: StockLevel,
 ): Promise<PipelineResultV2> {
   const t0 = Date.now();
 
@@ -738,23 +783,29 @@ export async function searchPipelineV2ForItem(
     matchMethod: PipelineResultV2["matchMethod"],
     reformulated: string,
     exactFound: boolean,
-  ): PipelineResultV2 => ({
-    position,
-    originalName: item.name,
-    unit: item.unit,
-    quantity: item.quantity,
-    matchType,
-    confidence,
-    product,
-    candidates,
-    reasoning,
-    priceNote: null,
-    reformulatedQuery: reformulated,
-    pipelineMs: Date.now() - t0,
-    exactLookupAttempted: true,
-    exactLookupFound: exactFound,
-    matchMethod,
-  });
+    stockCtx?: StockContext,
+  ): PipelineResultV2 => {
+    const sortedCandidates = candidates;
+
+    return {
+      position,
+      originalName: item.name,
+      unit: item.unit,
+      quantity: item.quantity,
+      matchType,
+      confidence,
+      product,
+      candidates: sortedCandidates,
+      reasoning,
+      priceNote: null,
+      reformulatedQuery: reformulated,
+      pipelineMs: Date.now() - t0,
+      exactLookupAttempted: true,
+      exactLookupFound: exactFound,
+      matchMethod,
+      stockContext: stockCtx,
+    };
+  };
 
   try {
     // ── Phase 0: AI Preprocessing ─────────────────────────
@@ -777,8 +828,10 @@ export async function searchPipelineV2ForItem(
     const eanProduct = await tryEanLookup(preprocessed.eans, onDebug, position);
     if (eanProduct) {
       onDebug?.({ position, step: "ean_match", data: { sku: eanProduct.sku, name: eanProduct.name } });
+      const [enriched] = await fetchProductsBySkus([eanProduct.sku]).catch(() => []);
+      const finalEan = enriched ?? eanProduct;
       return buildResult(
-        "match", 100, slimProduct(eanProduct), [],
+        "match", 100, slimProduct(finalEan), [],
         `Produkt nalezen přesnou shodou EAN kódu.`,
         "ean", preprocessed.reformulated, true,
       );
@@ -791,8 +844,10 @@ export async function searchPipelineV2ForItem(
     );
     if (codeProduct) {
       onDebug?.({ position, step: "code_match", data: { sku: codeProduct.sku, name: codeProduct.name } });
+      const [enriched] = await fetchProductsBySkus([codeProduct.sku]).catch(() => []);
+      const finalCode = enriched ?? codeProduct;
       return buildResult(
-        "match", 98, slimProduct(codeProduct), [],
+        "match", 98, slimProduct(finalCode), [],
         `Produkt nalezen přesnou shodou kódu produktu, ověřeno checkerem.`,
         "code", preprocessed.reformulated, true,
       );
@@ -801,11 +856,24 @@ export async function searchPipelineV2ForItem(
     // ── Layer 3/4: ReAct Agent ────────────────────────────
     const manufacturerFilter = groupContext?.preferredManufacturer ?? null;
     const lineFilter = groupContext?.preferredLine ?? null;
+    const requestedLevel = prefsToStockLevel(preferences);
+    const effectiveLevel = stockLevelOverride ?? requestedLevel;
+    const stockOpts = stockLevelToOpts(effectiveLevel, preferences?.branchFilter);
+    const stockCtx: StockContext = {
+      requestedLevel,
+      effectiveLevel,
+      fallbackUsed: effectiveLevel !== requestedLevel,
+    };
+
+    onDebug?.({
+      position, step: "stock_level",
+      data: { requestedLevel, effectiveLevel, fallbackUsed: stockCtx.fallbackUsed },
+    });
 
     const agentResult = await runReactAgent(
       item.name, item.unit, item.quantity,
       preprocessed, manufacturerFilter, lineFilter,
-      onDebug, position,
+      onDebug, position, undefined, stockOpts,
     );
 
     // Fetch full product data for selected + alternatives
@@ -861,7 +929,7 @@ export async function searchPipelineV2ForItem(
           selectedProduct ? slimProduct(selectedProduct) : null,
           okAlternatives.map(slimProduct),
           agentResult.reasoning,
-          "semantic", preprocessed.reformulated, false,
+          "semantic", preprocessed.reformulated, false, stockCtx,
         );
       }
 
@@ -871,7 +939,7 @@ export async function searchPipelineV2ForItem(
           "multiple", 0, null,
           okAlternatives.map(slimProduct),
           `Checker vyřadil původní výběr (${checkerResult.selectedReason}). Zbývá ${okAlternatives.length} technicky správný kandidát(ů) — uživatel vybírá.`,
-          "semantic", preprocessed.reformulated, false,
+          "semantic", preprocessed.reformulated, false, stockCtx,
         );
       }
 
@@ -883,6 +951,7 @@ export async function searchPipelineV2ForItem(
         preprocessed, manufacturerFilter, lineFilter,
         onDebug, position,
         `Vybraný produkt "${selectedInfo?.name ?? "?"}" byl zamítnut: ${checkerResult.selectedReason}. Všechny alternativy byly také špatné.`,
+        stockOpts,
       );
 
       const retrySkus = [
@@ -921,7 +990,7 @@ export async function searchPipelineV2ForItem(
             retryResult.matchType, retryResult.confidence,
             slimProduct(retrySelected), retryOk.map(slimProduct),
             `(retry) ${retryResult.reasoning}`,
-            "semantic", preprocessed.reformulated, false,
+            "semantic", preprocessed.reformulated, false, stockCtx,
           );
         }
 
@@ -931,7 +1000,7 @@ export async function searchPipelineV2ForItem(
             "multiple", 0, null,
             retryOk.map(slimProduct),
             `(retry) Checker vyřadil výběr, zbývá ${retryOk.length} technicky správný kandidát(ů) — uživatel vybírá.`,
-            "semantic", preprocessed.reformulated, false,
+            "semantic", preprocessed.reformulated, false, stockCtx,
           );
         }
       }
@@ -940,7 +1009,7 @@ export async function searchPipelineV2ForItem(
       return buildResult(
         "not_found", 0, null, [],
         `Agent ani po opakovaném pokusu nenašel technicky správný produkt.`,
-        "not_found", preprocessed.reformulated, false,
+        "not_found", preprocessed.reformulated, false, stockCtx,
       );
     }
 
@@ -957,7 +1026,7 @@ export async function searchPipelineV2ForItem(
       candidateProducts.map(slimProduct),
       agentResult.reasoning,
       agentResult.matchType === "not_found" ? "not_found" : "semantic",
-      preprocessed.reformulated, false,
+      preprocessed.reformulated, false, stockCtx,
     );
 
   } catch (err) {

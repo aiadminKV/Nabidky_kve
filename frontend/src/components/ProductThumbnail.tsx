@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { getProductImageUrl } from "@/lib/types";
 
 interface ProductThumbnailProps {
@@ -18,30 +19,54 @@ const SIZE_CLASSES = {
   lg: "h-16 w-16",
 };
 
+const ZOOM_WIDTH = 208;  // w-52
+const ZOOM_HEIGHT = 240; // h-48 image + name + padding
+
 export function ProductThumbnail({ sku, name = "", size = "sm", thumbSize }: ProductThumbnailProps) {
   const [failed, setFailed] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const [zoomPos, setZoomPos] = useState<"left" | "right">("right");
+  const [mounted, setMounted] = useState(false);
+  const [zoomStyle, setZoomStyle] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
 
   const resolvedThumbSize = thumbSize ?? (size === "lg" ? "L" : "S");
   const thumbUrl = getProductImageUrl(sku, resolvedThumbSize);
   const zoomUrl = getProductImageUrl(sku, "L");
 
-  const handleMouseEnter = useCallback(() => {
+  useEffect(() => { setMounted(true); }, []);
+
+  const computeZoomPos = useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const spaceRight = window.innerWidth - rect.right;
-    setZoomPos(spaceRight >= 220 ? "right" : "left");
-    setHovered(true);
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+
+    // Horizontal: prefer right side, fall back to left
+    const spaceRight = vw - rect.right;
+    let left: number;
+    if (spaceRight >= ZOOM_WIDTH + 8) {
+      left = rect.right + 8;
+    } else {
+      left = Math.max(8, rect.left - ZOOM_WIDTH - 8);
+    }
+
+    // Vertical: center on the thumbnail, then clamp to viewport
+    let top = rect.top + rect.height / 2 - ZOOM_HEIGHT / 2;
+    top = Math.max(8, Math.min(top, vh - ZOOM_HEIGHT - 8));
+
+    setZoomStyle({ top, left });
   }, []);
+
+  const handleMouseEnter = useCallback(() => {
+    computeZoomPos();
+    setHovered(true);
+  }, [computeZoomPos]);
 
   const handleMouseLeave = useCallback(() => {
     setHovered(false);
   }, []);
 
   if (!thumbUrl || failed) {
-    // Placeholder box — same size, neutral color
     return (
       <div className={`${SIZE_CLASSES[size]} shrink-0 rounded-lg bg-kv-gray-100 border border-kv-gray-200 flex items-center justify-center`}>
         <svg className="h-4 w-4 text-kv-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -58,7 +83,7 @@ export function ProductThumbnail({ sku, name = "", size = "sm", thumbSize }: Pro
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Thumbnail — small image for fast load */}
+      {/* Thumbnail */}
       <div className={`${SIZE_CLASSES[size]} rounded-lg bg-kv-gray-50 border border-kv-gray-200 overflow-hidden flex items-center justify-center cursor-zoom-in`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -70,13 +95,18 @@ export function ProductThumbnail({ sku, name = "", size = "sm", thumbSize }: Pro
         />
       </div>
 
-      {/* Hover zoom — large image */}
-      {hovered && (
+      {/* Hover zoom — rendered via portal so overflow:hidden can't clip it */}
+      {hovered && mounted && createPortal(
         <div
-          className={`
-            absolute z-50 top-1/2 -translate-y-1/2 w-52 rounded-xl border border-kv-gray-200 bg-white shadow-xl p-2
-            ${zoomPos === "right" ? "left-full ml-2" : "right-full mr-2"}
-          `}
+          style={{
+            position: "fixed",
+            top: zoomStyle.top,
+            left: zoomStyle.left,
+            width: ZOOM_WIDTH,
+            zIndex: 9999,
+            pointerEvents: "none",
+          }}
+          className="rounded-xl border border-kv-gray-200 bg-white shadow-xl p-2"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -89,7 +119,8 @@ export function ProductThumbnail({ sku, name = "", size = "sm", thumbSize }: Pro
           {name && (
             <p className="mt-1.5 text-center text-[10px] text-kv-gray-400 leading-tight line-clamp-2">{name}</p>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

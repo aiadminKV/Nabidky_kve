@@ -11,9 +11,12 @@ import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
-import { offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx } from "@/lib/api";
+import { offerChat, searchItems, searchProducts, downloadXlsx, downloadSapXlsx, getSearchPlan, type SearchPlan } from "@/lib/api";
+import { SearchPlanPanel } from "@/components/SearchPlanPanel";
+import { PreSearchModal } from "@/components/PreSearchModal";
 import {
   generateItemId,
+  DEFAULT_SEARCH_PREFERENCES,
   type ChatMessage,
   type DebugEntry,
   type FileAttachment,
@@ -24,6 +27,7 @@ import {
   type OfferPhase,
   type ParsedItem,
   type Product,
+  type SearchPreferences,
   type ToolCallStatus,
 } from "@/lib/types";
 
@@ -56,6 +60,12 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     deliveryAddress: "",
   });
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
+  const [cachedToken, setCachedToken] = useState("");
+  const [preSearchOpen, setPreSearchOpen] = useState(false);
+  const [preSearchAction, setPreSearchAction] = useState<"full" | "not_found">("full");
+  const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
+  const [isPlanLoading, setIsPlanLoading] = useState(false);
+  const [searchPreferences, setSearchPreferences] = useState<SearchPreferences>(DEFAULT_SEARCH_PREFERENCES);
   const batchPositionOffset = useRef(0);
   const batchItemIds = useRef<string[]>([]);
   const idCounter = useRef(0);
@@ -85,12 +95,16 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     try {
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
-      return data.session?.access_token ?? "";
+      const token = data.session?.access_token ?? "";
+      if (token) setCachedToken(token);
+      return token;
     } catch {
       // Token refresh failed – return empty string; individual API calls will handle the 401
       return "";
     }
   }, [supabase]);
+
+  useEffect(() => { getToken(); }, [getToken]);
 
   const addMessage = useCallback((role: ChatMessage["role"], text: string, attachments?: FileAttachment[]) => {
     const msg: ChatMessage = {
@@ -450,17 +464,14 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }, []);
 
   // ──────────────────────────────────────────────────────────
-  // Handler: user clicks "Zpracovat" → search phase
+  // Actual search run (called after planning)
   // ──────────────────────────────────────────────────────────
 
-  const handleProcess = useCallback(async () => {
-    const validItems = parsedItems.filter((i) => i.name.trim());
-    if (validItems.length === 0) return;
-
-    setPhase("processing");
-    addMessage("system", `Vyhledávám ${validItems.length} položek v katalogu…`);
-
-    const emptyOfferItems: OfferItem[] = validItems.map((item, i) => ({
+  const handleRunSearch = useCallback(async (
+    items: ParsedItem[],
+    prefs: SearchPreferences,
+  ) => {
+    const emptyOfferItems: OfferItem[] = items.map((item, i) => ({
       itemId: generateItemId(),
       position: i,
       originalName: item.name,
@@ -477,12 +488,15 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setOfferItems(emptyOfferItems);
     const batchIdMap = emptyOfferItems.map((i) => i.itemId);
     setSearchingSet(new Set(batchIdMap));
+    setPhase("processing");
+    addMessage("system", `Vyhledávám ${items.length} položek v katalogu…`);
 
     try {
       const token = await getToken();
       const stream = searchItems(
-        validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        items.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
         token,
+        prefs,
       );
 
       for await (const event of stream) {
@@ -494,11 +508,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           const data = event.data as unknown as OfferItem;
           const id = batchIdMap[data.position];
           if (id) {
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
+            setSearchingSet((prev) => { const next = new Set(prev); next.delete(id); return next; });
             flashPosition(data.position);
             setOfferItems((prev) =>
               prev.map((item) =>
@@ -509,30 +519,36 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             );
           }
         } else if (event.type === "debug") {
-          const d = event.data as unknown as DebugEntry;
-          setDebugLog((prev) => [...prev, d]);
+          setDebugLog((prev) => [...prev, event.data as unknown as DebugEntry]);
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
           setPhase("review");
-          addMessage("system", "Zpracování dokončeno. Zkontrolujte výsledky a stáhněte Excel.");
+          addMessage("system", "Zpracování dokončeno. Zkontrolujte výsledky.");
         } else if (event.type === "error") {
           addMessage("system", `Chyba: ${event.data.message}`);
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Nastala chyba";
-      addMessage("system", `Chyba: ${msg}`);
+      addMessage("system", `Chyba: ${err instanceof Error ? err.message : "Nastala chyba"}`);
     } finally {
       setSearchingSet(new Set());
-      if (phase === "processing") setPhase("review");
+      setPhase((p) => p === "processing" ? "review" : p);
     }
-  }, [parsedItems, addMessage, getToken, phase]);
+  }, [addMessage, getToken, flashPosition]);
 
   // ──────────────────────────────────────────────────────────
-  // Handler: user clicks "Zpracovat nenalezené" → semantic search
+  // Handler: user clicks "Zpracovat" → open pre-search modal
   // ──────────────────────────────────────────────────────────
 
-  const handleProcessNotFound = useCallback(async () => {
+  const handleProcess = useCallback(() => {
+    const validItems = parsedItems.filter((i) => i.name.trim());
+    if (validItems.length === 0) return;
+    setPreSearchAction("full");
+    setPreSearchOpen(true);
+  }, [parsedItems]);
+
+  // Internal: direct search for not-found items with given prefs
+  const handleProcessNotFoundWithPrefs = useCallback(async (prefs: SearchPreferences) => {
     const notFoundItems = offerItems.filter(
       (i) => i.matchType === "not_found" && !i.confirmed,
     );
@@ -541,11 +557,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setIsSearchingSemantic(true);
     const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
     setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
-    addMessage("system", `Spouštím sémantické vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
+    addMessage("system", `Spouštím vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
 
     try {
       const token = await getToken();
-      const stream = searchItemsSemantic(
+      const stream = searchItems(
         notFoundItems.map((i) => ({
           name: i.originalName,
           unit: i.unit,
@@ -553,6 +569,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           position: i.position,
         })),
         token,
+        prefs,
       );
 
       for await (const event of stream) {
@@ -573,24 +590,65 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
               ),
             );
           }
-        } else if (event.type === "debug") {
-          const d = event.data as unknown as DebugEntry;
-          setDebugLog((prev) => [...prev, d]);
         } else if (event.type === "status" && event.data.phase === "review") {
           setSearchingSet(new Set());
-          addMessage("system", "Sémantické vyhledávání dokončeno.");
+          addMessage("system", "Vyhledávání nenalezených položek dokončeno.");
         } else if (event.type === "error") {
           addMessage("system", `Chyba: ${event.data.message}`);
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Nastala chyba";
-      addMessage("system", `Chyba: ${msg}`);
+      addMessage("system", `Chyba: ${err instanceof Error ? err.message : "Nastala chyba"}`);
     } finally {
       setSearchingSet(new Set());
       setIsSearchingSemantic(false);
     }
   }, [offerItems, addMessage, getToken]);
+
+  // Called when user confirms settings → planning → search (or step-2 only for not_found)
+  const handlePreSearchConfirm = useCallback(async (prefs: SearchPreferences) => {
+    setPreSearchOpen(false);
+    setSearchPreferences(prefs);
+
+    if (preSearchAction === "not_found") {
+      await handleProcessNotFoundWithPrefs(prefs);
+      return;
+    }
+
+    const validItems = parsedItems.filter((i) => i.name.trim());
+    setIsPlanLoading(true);
+    setPhase("planning");
+    addMessage("system", `Analyzuji ${validItems.length} položek a připravuji plán vyhledávání…`);
+
+    try {
+      const token = await getToken();
+      const plan = await getSearchPlan(
+        validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        token,
+        prefs,
+      );
+      setSearchPlan(plan);
+      addMessage("system", `Plán připraven: ${plan.groups.length} ${plan.groups.length === 1 ? "skupina" : "skupin"}. Zkontrolujte a spusťte vyhledávání.`);
+    } catch (err) {
+      addMessage("system", `Chyba plánování: ${err instanceof Error ? err.message : "Selhalo"}. Spouštím bez plánu.`);
+      handleRunSearch(validItems, prefs);
+    } finally {
+      setIsPlanLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preSearchAction, parsedItems, addMessage, getToken, handleRunSearch]);
+
+  // ──────────────────────────────────────────────────────────
+  // Handler: user clicks "Zpracovat nenalezené" → semantic search
+  // ──────────────────────────────────────────────────────────
+
+  // "Zpracovat nenalezené" — opens PreSearchModal, step 2 only
+  const handleProcessNotFound = useCallback(() => {
+    const notFoundItems = offerItems.filter((i) => i.matchType === "not_found" && !i.confirmed);
+    if (notFoundItems.length === 0) return;
+    setPreSearchAction("not_found");
+    setPreSearchOpen(true);
+  }, [offerItems]);
 
   // ──────────────────────────────────────────────────────────
   // Review handlers
@@ -684,7 +742,24 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setReviewItem(null);
     setMessages([]);
     setDebugLog([]);
+    setSearchPlan(null);
   }, []);
+
+  const handleAddItem = useCallback(() => {
+    const newItem: OfferItem = {
+      itemId: generateItemId(),
+      position: offerItems.length,
+      originalName: "",
+      unit: null,
+      quantity: null,
+      matchType: "not_found" as const,
+      confidence: 0,
+      product: null,
+      candidates: [],
+    };
+    setOfferItems((prev) => [...prev, newItem]);
+    if (phase === "idle" || phase === "parsed") setPhase("review");
+  }, [offerItems.length, phase]);
 
   const handleClearDebug = useCallback(() => {
     setDebugLog([]);
@@ -723,7 +798,23 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             items={parsedItems}
             onItemsChange={setParsedItems}
             onProcess={handleProcess}
-            isProcessing={false}
+            isProcessing={isPlanLoading}
+          />
+        );
+
+      case "planning":
+        return (
+          <SearchPlanPanel
+            plan={searchPlan}
+            isLoading={isPlanLoading}
+            onApprove={(plan) => {
+              const validItems = parsedItems.filter((i) => i.name.trim());
+              handleRunSearch(validItems, searchPreferences);
+            }}
+            onSkip={() => {
+              const validItems = parsedItems.filter((i) => i.name.trim());
+              handleRunSearch(validItems, searchPreferences);
+            }}
           />
         );
 
@@ -739,7 +830,9 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             onSendSap={() => {}}
             onReset={handleReset}
             onProcessNotFound={handleProcessNotFound}
+            onAddItem={handleAddItem}
             isSearchingSemantic={isSearchingSemantic}
+            token={cachedToken}
           />
         );
     }
@@ -770,6 +863,16 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
         </div>
       </div>
 
+      {/* Pre-search settings modal */}
+      {preSearchOpen && (
+        <PreSearchModal
+          token={cachedToken}
+          itemCount={parsedItems.filter((i) => i.name.trim()).length}
+          onConfirm={handlePreSearchConfirm}
+          onCancel={() => setPreSearchOpen(false)}
+        />
+      )}
+
       {/* Review modal */}
       {reviewItem && (
         <ReviewModal
@@ -778,6 +881,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           onSkip={handleSkip}
           onClose={() => setReviewItem(null)}
           onManualSearch={handleManualSearch}
+          token={cachedToken}
         />
       )}
 

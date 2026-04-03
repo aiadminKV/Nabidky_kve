@@ -11,12 +11,12 @@ import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { OfferHeaderSummary } from "@/components/OfferHeaderSummary";
-import { SearchPreferencesBar } from "@/components/SearchPreferencesBar";
+import { PreSearchModal } from "@/components/PreSearchModal";
 import { createClient } from "@/lib/supabase/client";
 import { parsePastedText } from "@/lib/parsePaste";
 import {
-  offerChat, searchItems, searchItemsSemantic, searchProducts, downloadXlsx, downloadSapXlsx, sendSapEmail,
-  getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan,
+  offerChat, searchItems, searchProducts, downloadXlsx, downloadSapXlsx, sendSapEmail,
+  getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan, searchItemWithStockLevel,
   type ChatMessageDTO, type SaveOfferItemInput, type SearchPlan,
 } from "@/lib/api";
 import { SearchPlanPanel } from "@/components/SearchPlanPanel";
@@ -33,6 +33,7 @@ import type {
   Product,
   ReviewStatus,
   SearchPreferences,
+  StockLevel,
   ToolCallStatus,
 } from "@/lib/types";
 import { DEFAULT_SEARCH_PREFERENCES, generateItemId } from "@/lib/types";
@@ -57,6 +58,9 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
   const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
+  const [preSearchOpen, setPreSearchOpen] = useState(false);
+  // "full" = initial search from parsedItems, "again" = re-run from offerItems, "not_found" = step-2 only
+  const [preSearchAction, setPreSearchAction] = useState<"full" | "again" | "not_found">("full");
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
@@ -110,7 +114,9 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     try {
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
-      return data.session?.access_token ?? "";
+      const token = data.session?.access_token ?? "";
+      if (token) setCachedToken(token);
+      return token;
     } catch {
       return "";
     }
@@ -867,37 +873,58 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     }
   }, [parsedItems, addMessage, getToken, phase, flashPosition, debouncedSaveItems, offerHeader.searchPreferences]);
 
-  const handleProcess = useCallback(async () => {
+  // Open the pre-search settings modal before starting planning
+  const handleProcess = useCallback(() => {
     const validItems = parsedItems.filter((i) => i.name.trim());
     if (validItems.length === 0) return;
+    setPreSearchAction("full");
+    setPreSearchOpen(true);
+  }, [parsedItems]);
+
+  // Called when user confirms settings in PreSearchModal
+  const handlePreSearchConfirm = useCallback(async (prefs: SearchPreferences) => {
+    setPreSearchOpen(false);
+    handleHeaderChange({ ...offerHeader, searchPreferences: prefs });
+
+    if (preSearchAction === "not_found") {
+      await handleProcessNotFoundWithPrefs(prefs);
+      return;
+    }
+
+    // "full" = from parsedItems (initial), "again" = from existing offerItems
+    const sourceItems: ParsedItem[] = preSearchAction === "again"
+      ? offerItems
+          .filter((i) => i.originalName.trim())
+          .map((i) => ({ id: i.itemId, name: i.originalName, unit: i.unit ?? null, quantity: i.quantity ?? null, extraColumns: i.extraColumns }))
+      : parsedItems.filter((i) => i.name.trim());
 
     setIsPlanLoading(true);
     setPhase("planning");
-    addMessage("system", `Analyzuji ${validItems.length} položek a připravuji plán vyhledávání…`);
-
+    addMessage("system", `Analyzuji ${sourceItems.length} položek a připravuji plán vyhledávání…`);
     try {
       const token = await getToken();
       const plan = await getSearchPlan(
-        validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        sourceItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
         token,
-        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
+        prefs,
       );
       setSearchPlan(plan);
       addMessage("system", `Plán připraven: ${plan.groups.length} ${plan.groups.length === 1 ? "skupina" : "skupin"}. Zkontrolujte a spusťte vyhledávání.`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Plánování selhalo";
-      addMessage("system", `Chyba plánování: ${msg}. Spouštím vyhledávání bez plánu.`);
-      handleRunSearch(validItems);
+      addMessage("system", `Chyba plánování: ${err instanceof Error ? err.message : "Selhalo"}. Spouštím bez plánu.`);
+      handleRunSearch(sourceItems);
     } finally {
       setIsPlanLoading(false);
     }
-  }, [parsedItems, addMessage, getToken, offerHeader.searchPreferences, handleRunSearch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preSearchAction, parsedItems, offerItems, offerHeader, handleHeaderChange, addMessage, getToken, handleRunSearch]);
 
   // ──────────────────────────────────────────────────────────
   // Handler: user clicks "Zpracovat nenalezené" -> semantic search
   // ──────────────────────────────────────────────────────────
 
-  const handleProcessNotFound = useCallback(async () => {
+  // Internal: runs search for not-found items with given prefs
+  const handleProcessNotFoundWithPrefs = useCallback(async (prefs: SearchPreferences) => {
     const notFoundItems = offerItems.filter(
       (i) => i.matchType === "not_found" && !i.confirmed,
     );
@@ -906,11 +933,11 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
     setIsSearchingSemantic(true);
     setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
-    addMessage("system", `Spouštím sémantické vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
+    addMessage("system", `Spouštím vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
 
     try {
       const token = await getToken();
-      const stream = searchItemsSemantic(
+      const stream = searchItems(
         notFoundItems.map((i) => ({
           name: i.originalName,
           unit: i.unit,
@@ -918,7 +945,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           position: i.position,
         })),
         token,
-        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
+        prefs,
       );
 
       for await (const event of stream) {
@@ -956,6 +983,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       setIsSearchingSemantic(false);
     }
   }, [offerItems, addMessage, getToken, debouncedSaveItems]);
+
+  // "Zpracovat nenalezené" — opens PreSearchModal, step 2 only
+  const handleProcessNotFound = useCallback(() => {
+    const notFoundItems = offerItems.filter((i) => i.matchType === "not_found" && !i.confirmed);
+    if (notFoundItems.length === 0) return;
+    setPreSearchAction("not_found");
+    setPreSearchOpen(true);
+  }, [offerItems]);
 
   // ──────────────────────────────────────────────────────────
   // Review handlers
@@ -1014,6 +1049,45 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       return searchProducts(query, token);
     },
     [getToken],
+  );
+
+  const handleSearchWithStockLevel = useCallback(
+    async (item: OfferItem, level: StockLevel) => {
+      const token = await getToken();
+      setReviewItem(null);
+      setSearchingSet((prev) => new Set(prev).add(item.itemId));
+
+      try {
+        const sse = searchItemWithStockLevel(
+          { name: item.originalName, unit: item.unit, quantity: item.quantity },
+          token,
+          offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
+          undefined,
+          level,
+        );
+        for await (const event of sse) {
+          if (event.type === "item_matched") {
+            const data = event.data as unknown as OfferItem;
+            setOfferItems((prev) => {
+              const next = prev.map((i) =>
+                i.itemId === item.itemId
+                  ? { ...i, ...data, itemId: item.itemId, position: item.position, extraColumns: i.extraColumns, reviewStatus: "ai_suggestion" as const }
+                  : i,
+              );
+              debouncedSaveItems(next);
+              return next;
+            });
+          }
+        }
+      } finally {
+        setSearchingSet((prev) => {
+          const next = new Set(prev);
+          next.delete(item.itemId);
+          return next;
+        });
+      }
+    },
+    [getToken, offerHeader.searchPreferences, debouncedSaveItems],
   );
 
   // ──────────────────────────────────────────────────────────
@@ -1084,135 +1158,18 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   // Re-process all items (new search from scratch)
   // ──────────────────────────────────────────────────────────
 
-  const handleProcessAgain = useCallback(async () => {
+  // "Zpracovat znovu" — opens PreSearchModal for full pipeline (planning + search) on existing items
+  const handleProcessAgain = useCallback(() => {
     const validItems = offerItems.filter((i) => i.originalName.trim());
     if (validItems.length === 0) return;
-
-    setPhase("processing");
-    addMessage("system", `Spouštím nové vyhledávání pro ${validItems.length} položek…`);
-
-    const resetItems: OfferItem[] = validItems.map((item, i) => ({
-      ...item,
-      position: i,
-      matchType: "not_found" as const,
-      confidence: 0,
-      product: null,
-      candidates: [],
-      confirmed: undefined,
-      reviewStatus: undefined,
-    }));
-    setOfferItems(resetItems);
-    const batchIdMap = resetItems.map((i) => i.itemId);
-    setSearchingSet(new Set(batchIdMap));
-
-    try {
-      const token = await getToken();
-      const stream = searchItems(
-        validItems.map((i) => ({ name: i.originalName, unit: i.unit, quantity: i.quantity })),
-        token,
-        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
-      );
-
-      for await (const event of stream) {
-        if (event.type === "item_searching") {
-          const pos = event.data.position as number;
-          const id = batchIdMap[pos];
-          if (id) setSearchingSet((prev) => new Set(prev).add(id));
-        } else if (event.type === "item_matched") {
-          const data = event.data as unknown as OfferItem;
-          const id = batchIdMap[data.position];
-          if (id) {
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
-            flashPosition(data.position);
-            setOfferItems((prev) => {
-              const next = prev.map((item) =>
-                item.itemId === id
-                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
-                  : item,
-              );
-              debouncedSaveItems(next);
-              return next;
-            });
-          }
-        } else if (event.type === "status" && event.data.phase === "review") {
-          setSearchingSet(new Set());
-          setPhase("review");
-          addMessage("system", "Nové vyhledávání dokončeno. Zkontrolujte výsledky.");
-        } else if (event.type === "error") {
-          addMessage("system", `Chyba: ${event.data.message}`);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Nastala chyba";
-      addMessage("system", `Chyba: ${msg}`);
-    } finally {
-      setSearchingSet(new Set());
-      setPhase("review");
-    }
-  }, [offerItems, addMessage, getToken, flashPosition, debouncedSaveItems]);
+    setPreSearchAction("again");
+    setPreSearchOpen(true);
+  }, [offerItems]);
 
   // ──────────────────────────────────────────────────────────
   // Search single item
   // ──────────────────────────────────────────────────────────
 
-  const handleSearchSingleItem = useCallback(async (item: OfferItem) => {
-    if (!item.originalName.trim()) return;
-    const targetId = item.itemId;
-
-    setSearchingSet((prev) => new Set(prev).add(targetId));
-    setOfferItems((prev) =>
-      prev.map((i) =>
-        i.itemId === targetId
-          ? { ...i, matchType: "not_found" as const, confidence: 0, product: null, candidates: [], confirmed: undefined, reviewStatus: undefined }
-          : i,
-      ),
-    );
-
-    try {
-      const token = await getToken();
-      const stream = searchItemsSemantic(
-        [{ name: item.originalName, unit: item.unit, quantity: item.quantity, position: item.position }],
-        token,
-        offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
-      );
-
-      for await (const event of stream) {
-        if (event.type === "item_matched") {
-          const data = event.data as unknown as OfferItem;
-          setSearchingSet((prev) => {
-            const next = new Set(prev);
-            next.delete(targetId);
-            return next;
-          });
-          flashPosition(item.position);
-          setOfferItems((prev) => {
-            const next = prev.map((i) =>
-              i.itemId === targetId
-                ? { ...i, ...data, itemId: targetId, extraColumns: i.extraColumns }
-                : i,
-            );
-            debouncedSaveItems(next);
-            return next;
-          });
-        } else if (event.type === "error") {
-          addMessage("system", `Chyba při vyhledávání položky: ${event.data.message}`);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Nastala chyba";
-      addMessage("system", `Chyba: ${msg}`);
-    } finally {
-      setSearchingSet((prev) => {
-        const next = new Set(prev);
-        next.delete(targetId);
-        return next;
-      });
-    }
-  }, [addMessage, getToken, flashPosition, debouncedSaveItems]);
 
   // ──────────────────────────────────────────────────────────
   // Export & reset
@@ -1472,7 +1429,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             onProcessAgain={handleProcessAgain}
             onAddItem={handleAddItem}
             onDeleteItem={handleDeleteItem}
-            onSearchItem={handleSearchSingleItem}
             onReorder={handleReorder}
             onInsertAt={handleInsertAt}
             isSearchingSemantic={isSearchingSemantic}
@@ -1519,11 +1475,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
           {/* Right panel – Context-dependent */}
           <div className="flex flex-1 min-h-0 min-w-0 flex-col gap-3">
-            <SearchPreferencesBar
-              prefs={offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES}
-              onChange={(newPrefs) => handleHeaderChange({ ...offerHeader, searchPreferences: newPrefs })}
-              token={cachedToken}
-            />
             <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-kv-gray-200 bg-white shadow-sm">
               <div className="flex-1 min-h-0 min-w-0">
                 {renderRightPanel()}
@@ -1533,6 +1484,16 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
         </div>
       </div>
 
+      {/* Pre-search settings modal */}
+      {preSearchOpen && (
+        <PreSearchModal
+          token={cachedToken}
+          itemCount={parsedItems.filter((i) => i.name.trim()).length}
+          onConfirm={handlePreSearchConfirm}
+          onCancel={() => setPreSearchOpen(false)}
+        />
+      )}
+
       {/* Review modal */}
       {reviewItem && (
         <ReviewModal
@@ -1541,6 +1502,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           onSkip={handleSkip}
           onClose={() => setReviewItem(null)}
           onManualSearch={handleManualSearch}
+          onSearchWithStockLevel={handleSearchWithStockLevel}
           token={cachedToken}
         />
       )}

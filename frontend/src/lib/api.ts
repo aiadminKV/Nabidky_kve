@@ -1,4 +1,4 @@
-import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader, FileAttachment, ReviewStatus, SearchPreferences } from "./types";
+import type { SSEEvent, Product, PricelistUpload, OfferItemSummary, OfferHeader, FileAttachment, ReviewStatus, SearchPreferences, StockLevel } from "./types";
 
 /** Backend URL — direct from browser, no proxy */
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -73,6 +73,21 @@ export function standaloneSearch(
   return streamSSE("/agent/standalone-search", body, token);
 }
 
+/** Re-search a single item with optional stock level override (SSE) */
+export function searchItemWithStockLevel(
+  item: { name: string; unit?: string | null; quantity?: number | null },
+  token: string,
+  searchPreferences?: SearchPreferences,
+  groupContext?: { preferredManufacturer: string | null; preferredLine: string | null },
+  stockLevelOverride?: StockLevel,
+) {
+  const body: Record<string, unknown> = { item };
+  if (searchPreferences) body.searchPreferences = searchPreferences;
+  if (groupContext) body.groupContext = groupContext;
+  if (stockLevelOverride) body.stockLevelOverride = stockLevelOverride;
+  return streamSSE("/agent/search-item", body, token);
+}
+
 /** Search for already-parsed items (SSE) */
 export function searchItems(
   items: Array<{ name: string; unit: string | null; quantity: number | null; instruction?: string | null; isSet?: boolean; setHint?: string | null; parentItemId?: string | null }>,
@@ -107,16 +122,6 @@ export function offerChat(
   return streamSSE("/agent/offer-chat", body, token);
 }
 
-/** Semantic search for not_found items (SSE) – user-triggered Phase 2 */
-export function searchItemsSemantic(
-  items: Array<{ name: string; unit: string | null; quantity: number | null; position: number }>,
-  token: string,
-  searchPreferences?: SearchPreferences,
-) {
-  const body: Record<string, unknown> = { items };
-  if (searchPreferences) body.searchPreferences = searchPreferences;
-  return streamSSE("/agent/search-semantic", body, token);
-}
 
 /** Manual single-product search for review modal (REST) */
 export async function searchProducts(

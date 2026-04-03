@@ -53,6 +53,11 @@ export interface Product {
   category_main?: string | null;
   category_sub?: string | null;
   category_line?: string | null;
+  status_purchase_code?: string | null;
+  status_purchase_text?: string | null;
+  status_sales_code?: string | null;
+  status_sales_text?: string | null;
+  dispo?: string | null;
 }
 
 /** A parsed item before search (editable by user) */
@@ -64,22 +69,17 @@ export interface ParsedItem {
   extraColumns?: Record<string, string>;
 }
 
-/** Offer type determines the overall search strategy */
-export type OfferType = "vyberko" | "realizace";
-
 /** Pre-search configuration that flows into the pipeline */
 export interface SearchPreferences {
-  offerType: OfferType;
+  /** "stock_items_only" = only is_stock_item=true products; "any" = whole catalogue */
   stockFilter: "any" | "in_stock" | "stock_items_only";
+  /** Branch code for branch-specific availability filter, null = any branch */
   branchFilter: string | null;
-  priceStrategy: "lowest" | "standard";
 }
 
 export const DEFAULT_SEARCH_PREFERENCES: SearchPreferences = {
-  offerType: "realizace",
   stockFilter: "any",
   branchFilter: null,
-  priceStrategy: "standard",
 };
 
 /** Customer/offer header data for export */
@@ -101,6 +101,14 @@ export interface OfferHeader {
 export interface GroupContext {
   preferredManufacturer: string | null;
   preferredLine: string | null;
+}
+
+export type StockLevel = "branch" | "stock_item" | "in_stock" | "any";
+
+export interface StockContext {
+  requestedLevel: StockLevel;
+  effectiveLevel: StockLevel;
+  fallbackUsed: boolean;
 }
 
 /** A matched offer item after search */
@@ -125,6 +133,8 @@ export interface OfferItem {
   exactLookupFound?: boolean;
   /** How the product was matched (V2 pipeline) */
   matchMethod?: "ean" | "code" | "semantic" | "not_found";
+  /** Stock filter context — which level was actually used */
+  stockContext?: StockContext;
   /** If this item is a component of a set, this points to the parent item's itemId */
   parentItemId?: string | null;
   /** Component role within a set (mechanism, cover, frame, etc.) */

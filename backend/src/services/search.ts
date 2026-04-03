@@ -17,6 +17,11 @@ export interface ProductResult {
   has_stock: boolean;
   removed_at: string | null;
   description: string | null;
+  status_purchase_code: string | null;
+  status_purchase_text: string | null;
+  status_sales_code: string | null;
+  status_sales_text: string | null;
+  dispo: string | null;
 }
 
 export interface FulltextResult extends ProductResult {
@@ -164,7 +169,9 @@ export async function fetchProductsBySkus(
     .select(`
       id, sku, name, unit, supplier_name,
       category_main, category_sub, category_line,
-      is_stock_item, removed_at, description
+      is_stock_item, removed_at, description,
+      status_purchase_code, status_purchase_text,
+      status_sales_code, status_sales_text, dispo
     `)
     .in("sku", skus);
 
@@ -172,10 +179,32 @@ export async function fetchProductsBySkus(
     throw new Error(`Fetch by SKU failed: ${error.message}`);
   }
 
-  return (data ?? []).map((p: any) => ({
+  const products = data ?? [];
+  const productIds = products.map((p: any) => p.id as number);
+
+  const [{ data: prices }, { data: stockData }] = await Promise.all([
+    supabase
+      .from("product_price_v2")
+      .select("product_id, current_price")
+      .in("product_id", productIds),
+    supabase
+      .from("product_branch_stock_v2")
+      .select("product_id")
+      .in("product_id", productIds),
+  ]);
+
+  const priceMap = new Map<number, number>(
+    (prices ?? []).map((p: any) => [p.product_id as number, Number(p.current_price)]),
+  );
+
+  const hasStockSet = new Set<number>(
+    (stockData ?? []).map((s: any) => s.product_id as number),
+  );
+
+  return products.map((p: any) => ({
     ...p,
-    current_price: null,
-    has_stock: false,
+    current_price: priceMap.get(p.id) ?? null,
+    has_stock: hasStockSet.has(p.id),
   })) as ProductResult[];
 }
 
