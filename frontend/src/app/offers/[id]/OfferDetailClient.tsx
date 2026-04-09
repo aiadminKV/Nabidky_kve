@@ -1399,10 +1399,10 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     <div className="flex h-screen flex-col bg-kv-gray-50">
       <Header email={email} isAdmin={isAdmin} offerTitle={offerTitle} />
 
-      <div className="flex flex-1 min-h-0 overflow-hidden p-4 sm:p-5">
-        <div className="flex flex-1 min-h-0 gap-4">
+      <div className="flex flex-1 min-h-0 overflow-hidden p-3 sm:p-4">
+        <div className="flex flex-1 min-h-0 gap-3">
           {/* Left panel – Chat + Debug */}
-          <div className="flex w-[420px] shrink-0 min-h-0 flex-col gap-3">
+          <div className="flex w-[360px] shrink-0 min-h-0 flex-col gap-3 xl:w-[380px] 2xl:w-[420px]">
             <OfferHeaderSummary
               header={offerHeader}
               onEdit={() => setIsHeaderModalOpen(true)}
@@ -1410,7 +1410,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             />
 
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-kv-gray-200 bg-white shadow-sm">
-              <div className="border-b border-kv-gray-200 px-5 py-4">
+              <div className="border-b border-kv-gray-200 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-kv-navy">AI KV Agent</h2>
                 </div>

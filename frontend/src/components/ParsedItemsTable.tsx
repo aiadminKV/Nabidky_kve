@@ -44,8 +44,8 @@ export function ParsedItemsTable({
   onProcess,
   isProcessing,
 }: ParsedItemsTableProps) {
-  const neutralButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-kv-gray-200 bg-white px-4 text-xs font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50 disabled:opacity-40 disabled:cursor-not-allowed";
-  const primaryButtonClass = "inline-flex h-11 items-center gap-2 rounded-2xl bg-kv-red px-5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed";
+  const neutralButtonClass = "inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-kv-gray-200 bg-white px-4 text-xs font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50 disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap";
+  const primaryButtonClass = "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-kv-red px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap";
   const extraColumnKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const item of items) {
@@ -116,9 +116,9 @@ export function ParsedItemsTable({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header bar */}
-      <div className="border-b border-kv-gray-200 bg-kv-gray-50/70 px-6 py-5">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div>
+      <div className="border-b border-kv-gray-200 bg-kv-gray-50/70 px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-kv-navy">Rozpoznané položky</h2>
               <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-kv-gray-500">
@@ -135,7 +135,7 @@ export function ParsedItemsTable({
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 self-start">
             <button
               onClick={addItem}
               className={neutralButtonClass}
@@ -173,7 +173,7 @@ export function ParsedItemsTable({
 
       {/* Editable table */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto custom-scrollbar">
-        <table className="w-full text-sm" style={{ minWidth: 988 }}>
+        <table className="w-full text-sm" style={{ minWidth: 900 + extraColumnKeys.length * 96 }}>
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
               <th style={{ width: "2%" }} className="pl-1 pr-0" />
@@ -196,11 +196,12 @@ export function ParsedItemsTable({
                 <td className="w-6 pl-1 pr-0 py-2.5" />
                 <td className="px-4 py-2.5 text-xs text-kv-gray-400 align-top pt-3">{idx + 1}</td>
                 <td className="px-4 py-2.5 align-top">
-                  <input
+                  <textarea
                     value={item.name}
                     onChange={(e) => updateItem(item.id, "name", e.target.value)}
                     placeholder="Název produktu…"
-                    className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm leading-5 text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
                   />
                 </td>
                 <td className="px-4 py-2.5 align-top">

@@ -318,10 +318,9 @@ export function ResultsTable({
     }));
     onReorder(reordered);
   }, [items, onReorder]);
-  const neutralButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-kv-gray-200 bg-white px-4 text-xs font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50 disabled:opacity-40 disabled:cursor-not-allowed";
-  const navyButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-kv-navy/20 bg-kv-navy/5 px-4 text-xs font-medium text-kv-navy transition-colors hover:bg-kv-navy/10 disabled:opacity-40 disabled:cursor-not-allowed";
-  const amberButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed";
-  const primaryButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl bg-kv-red px-4.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed";
+  const neutralButtonClass = "inline-flex h-9 items-center gap-1.5 rounded-xl border border-kv-gray-200 bg-white px-3.5 text-xs font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50 disabled:cursor-not-allowed disabled:opacity-40";
+  const navyButtonClass = "inline-flex h-9 items-center gap-1.5 rounded-xl border border-kv-navy/20 bg-kv-navy/5 px-3.5 text-xs font-medium text-kv-navy transition-colors hover:bg-kv-navy/10 disabled:cursor-not-allowed disabled:opacity-40";
+  const primaryButtonClass = "inline-flex h-9 items-center gap-1.5 rounded-xl bg-kv-red px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:cursor-not-allowed disabled:opacity-40";
 
   const topLevelItems = items.filter((i) => !i.parentItemId);
   const matchedCount = topLevelItems.filter((i) => i.matchType !== "not_found" || isItemConfirmed(i)).length;
@@ -348,9 +347,9 @@ export function ResultsTable({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header bar */}
-      <div className="shrink-0 border-b border-kv-gray-200 bg-kv-gray-50/70 px-6 py-4">
+      <div className="shrink-0 border-b border-kv-gray-200 bg-kv-gray-50/70 px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-kv-navy">Položky nabídky</h2>
             <span className="inline-flex items-center rounded-full border border-kv-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-kv-gray-500">
               {matchedCount}/{topLevelItems.length} nalezeno
@@ -401,7 +400,7 @@ export function ResultsTable({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             {onProcessAgain && (
               <button
                 onClick={() => setShowReprocessModal(true)}
@@ -456,8 +455,8 @@ export function ResultsTable({
 
       {/* Offer summary bar */}
       {!isSearching && items.length > 0 && (
-        <div className="shrink-0 border-b border-kv-gray-100 bg-white px-6 py-2.5">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]">
+        <div className="shrink-0 border-b border-kv-gray-100 bg-white px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
             <div className="flex items-center gap-1.5">
               <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold">{matchedCount}</span>
               <span className="text-kv-gray-500">nalezeno</span>
@@ -509,30 +508,30 @@ export function ResultsTable({
             onClick={onAddItem}
             aria-label="Přidat položku"
             title="Přidat položku"
-            className="absolute bottom-4 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full bg-kv-red text-white shadow-lg shadow-red-200 transition-all hover:bg-kv-red-dark hover:shadow-xl"
+            className="absolute bottom-4 right-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full bg-kv-red text-white shadow-lg shadow-red-200 transition-all hover:bg-kv-red-dark hover:shadow-xl"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
           </button>
         )}
-      <div className="h-full overflow-y-auto overflow-x-auto custom-scrollbar pb-24">
+      <div className="h-full overflow-y-auto overflow-x-auto custom-scrollbar pb-20">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <table className="w-full" style={{ minWidth: 988 }}>
+        <table className="w-full" style={{ minWidth: 840 + extraColumnKeys.length * 96 }}>
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
               <th style={{ width: "2%" }} className="pl-1 pr-0" />
-              <th style={{ width: "3%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">#</th>
-              <th style={{ width: "20%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Poptávka</th>
-              <th style={{ width: "11%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Množ.</th>
+              <th style={{ width: "3%" }} className="px-3 py-2 text-left text-xs font-medium text-kv-gray-400">#</th>
+              <th style={{ width: "18%" }} className="px-3 py-2 text-left text-xs font-medium text-kv-gray-400">Poptávka</th>
+              <th style={{ width: "8%" }} className="px-3 py-2 text-left text-xs font-medium text-kv-gray-400">Množ.</th>
               {extraColumnKeys.map((key) => (
-                <th key={key} style={{ width: "8%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 whitespace-nowrap">
+                <th key={key} style={{ width: "8%" }} className="px-3 py-2 text-left text-xs font-medium text-kv-gray-400 whitespace-nowrap">
                   {key}
                 </th>
               ))}
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Nalezený produkt</th>
-              <th style={{ width: "9%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-right text-xs font-medium text-kv-gray-400 whitespace-nowrap">Stav</th>
-              <th style={{ width: "7%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-center text-xs font-medium text-kv-gray-400 whitespace-nowrap">Akce</th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-kv-gray-400">Nalezený produkt</th>
+              <th style={{ width: "8%" }} className="border-l border-kv-gray-100 px-3 py-2 text-right text-xs font-medium text-kv-gray-400 whitespace-nowrap">Stav</th>
+              <th style={{ width: "6%" }} className="border-l border-kv-gray-100 px-3 py-2 text-center text-xs font-medium text-kv-gray-400 whitespace-nowrap">Akce</th>
             </tr>
           </thead>
             <SortableContext items={items.map((i) => i.itemId)} strategy={verticalListSortingStrategy}>
@@ -543,6 +542,21 @@ export function ResultsTable({
               const isReviewed = isItemConfirmed(item);
               const isComponent = !!item.parentItemId;
               const isSetParent = !isComponent && items.some((i) => i.parentItemId === item.itemId);
+              const productDescription = item.product?.description?.trim() ?? "";
+              const displayDescription =
+                !isCurrentlySearching && item.product
+                  ? (productDescription || "chybí popis")
+                  : "";
+              const rowNote =
+                !isCurrentlySearching && item.priceNote
+                  ? { tone: "amber" as const, text: item.priceNote }
+                  : !isCurrentlySearching &&
+                      item.exactLookupAttempted &&
+                      !item.exactLookupFound &&
+                      item.matchType === "not_found" &&
+                      item.candidates.length === 0
+                    ? { tone: "red" as const, text: "EAN/kód nenalezen v katalogu" }
+                    : null;
               return (
                 <SortableRow
                   key={item.itemId}
@@ -555,24 +569,32 @@ export function ResultsTable({
                   isLastRow={idx === items.length - 1}
                   onClick={() => !isCurrentlySearching && !isSetParent && onItemClick(item)}
                 >
-                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400 align-top pt-3">
+                  <td className="px-3 py-2 text-sm tabular-nums text-kv-gray-400 align-top">
                     {isComponent ? "" : item.position + 1}
                   </td>
-                  <td className={`px-4 py-2.5 text-sm text-kv-dark align-top pt-3 ${isComponent ? "pl-10" : ""}`}>
-                    {isComponent && (
-                      <span className="mr-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
-                        {COMPONENT_ROLE_LABELS[item.componentRole ?? ""] ?? item.componentRole ?? "?"}
+                  <td className={`w-[18%] max-w-0 px-3 py-2 text-sm text-kv-dark align-top ${isComponent ? "pl-8" : ""}`}>
+                    <div className="flex flex-col gap-0.5">
+                      {(isComponent || isSetParent) && (
+                        <div>
+                          {isComponent && (
+                            <span className="mr-1 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
+                              {COMPONENT_ROLE_LABELS[item.componentRole ?? ""] ?? item.componentRole ?? "?"}
+                            </span>
+                          )}
+                          {isSetParent && (
+                            <span className="mr-1 inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 border border-violet-200">
+                              SADA
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <span className="line-clamp-3 break-words text-sm leading-[1.35] text-kv-dark">
+                        {item.originalName}
                       </span>
-                    )}
-                    {isSetParent && (
-                      <span className="mr-1.5 inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 border border-violet-200">
-                        SADA
-                      </span>
-                    )}
-                    {item.originalName}
+                    </div>
                   </td>
-                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-dark align-top">
-                    <div className="flex items-center gap-1 pt-0.5">
+                  <td className="px-3 py-2 text-sm tabular-nums text-kv-dark align-top">
+                    <div className="flex items-center gap-1">
                       {item.quantity != null ? (
                         <>
                           <span className="font-medium">{item.quantity}</span>
@@ -594,20 +616,21 @@ export function ResultsTable({
                     </div>
                   </td>
                   {extraColumnKeys.map((key) => (
-                    <td key={key} className="px-4 py-2.5 text-sm text-kv-dark max-w-[150px] truncate">
+                    <td key={key} className="max-w-[120px] truncate px-3 py-2 text-sm text-kv-dark">
                       {item.extraColumns?.[key] ?? "—"}
                     </td>
                   ))}
-                  <td className="px-4 py-2.5 align-top">
+                  <td className="px-3 py-2 align-top">
                     <div className="flex items-start gap-2 min-w-0">
                         {item.product && !isCurrentlySearching ? (
                           <ProductThumbnail sku={item.product.sku} name={item.product.name} size="sm" />
                         ) : (
                           <div className="h-8 w-8 shrink-0" />
                         )}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-sm text-kv-dark truncate">
+                        <div className="flex h-[102px] min-w-0 flex-1 flex-col justify-between">
+                          {/* Name — top */}
+                          <div className="flex min-w-0 items-start gap-1.5">
+                            <span className="line-clamp-2 text-[13px] leading-[17px] text-kv-dark">
                               {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
                             </span>
                             {item.product && !isCurrentlySearching && (
@@ -617,114 +640,124 @@ export function ResultsTable({
                               </>
                             )}
                           </div>
-                          {/* Description — always rendered, fixed height to keep row stable */}
-                          <p
-                            className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
-                            title={item.product?.description ?? undefined}
-                          >
-                            {item.product?.description ?? ""}
-                          </p>
-                          {/* Badges row — fixed two-line area keeps row height stable without clipping important badges */}
-                          <div className="mt-0.5 flex h-10 content-start flex-wrap gap-x-1.5 gap-y-1 overflow-hidden pt-0.5">
-                            {!isCurrentlySearching && item.product && (
-                              <>
-                                <MatchMethodBadge method={item.matchMethod} />
-                                {(() => {
-                                  const total = item.candidates.length + 1;
-                                  return (
-                                    <span
-                                      title={`${total} ${total === 1 ? "varianta" : "varianty/variant"} celkem — klikněte pro výběr`}
-                                      className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
-                                        total > 1
-                                          ? "border-orange-200 bg-orange-50 text-orange-600"
-                                          : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400"
-                                      }`}
-                                    >
-                                      <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
-                                      </svg>
-                                      {total} var.
+                          {/* Description + Badges — bottom group */}
+                          <div>
+                            <p
+                              className={`mb-1 h-4 overflow-hidden text-[11px] leading-4 ${
+                                displayDescription === "chybí popis"
+                                  ? "italic text-kv-gray-300"
+                                  : "text-kv-gray-400"
+                              }`}
+                              title={productDescription || undefined}
+                            >
+                              <span className="line-clamp-1">{displayDescription}</span>
+                            </p>
+                          {/* Badges rows — explicit 2-line layout */}
+                          <div className="h-11 overflow-hidden">
+                            <div className="flex h-5 min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                              {!isCurrentlySearching && item.product && (
+                                <>
+                                  <MatchMethodBadge method={item.matchMethod} />
+                                  {(() => {
+                                    const total = item.candidates.length + 1;
+                                    return (
+                                      <span
+                                        title={`${total} ${total === 1 ? "varianta" : "varianty/variant"} celkem — klikněte pro výběr`}
+                                        className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                          total > 1
+                                            ? "border-orange-200 bg-orange-50 text-orange-600"
+                                            : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400"
+                                        }`}
+                                      >
+                                        <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+                                        </svg>
+                                        {total} var.
+                                      </span>
+                                    );
+                                  })()}
+                                  {item.product.sku && (
+                                    <span className="inline-flex h-5 items-center gap-0.5">
+                                      <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
+                                      <CopySkuButton sku={item.product.sku} />
                                     </span>
-                                  );
-                                })()}
-                                {item.product.sku && (
-                                  <span className="flex items-center gap-0.5">
-                                    <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
-                                    <CopySkuButton sku={item.product.sku} />
-                                  </span>
-                                )}
-                                {item.product.current_price != null && (
-                                  <span className="min-w-[72px] text-xs font-semibold text-kv-dark tabular-nums">
-                                    {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
-                                    {item.product.unit && <span className="ml-0.5 font-normal text-kv-gray-400">/{item.product.unit}</span>}
-                                  </span>
-                                )}
-                                <StockBadge product={item.product} token={token} />
-                                {item.product.status_sales_code && (() => {
-                                  const code = item.product!.status_sales_code!;
-                                  const variant = getStatusVariant(code);
-                                  const variantClass = {
-                                    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
-                                    amber: "border-amber-200 bg-amber-50 text-amber-700",
-                                    red:   "border-red-200 bg-red-50 text-red-600",
-                                    gray:  "border-kv-gray-200 bg-kv-gray-100 text-kv-gray-500",
-                                  }[variant];
-                                  const dotClass = {
-                                    green: "bg-emerald-500",
-                                    amber: "bg-amber-400",
-                                    red: "bg-red-500",
-                                    gray: "bg-kv-gray-300",
-                                  }[variant];
-                                  const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
-                                  return (
-                                    <span
-                                      className={`inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
-                                      title={item.product!.status_sales_text ?? code}
-                                    >
-                                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
-                                      {label}
+                                  )}
+                                  {item.product.current_price != null && (
+                                    <span className="inline-flex h-5 items-center whitespace-nowrap text-xs font-semibold leading-none text-kv-dark tabular-nums">
+                                      {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
+                                      {item.product.unit && <span className="ml-0.5 inline-flex items-center font-normal text-kv-gray-400">/{item.product.unit}</span>}
                                     </span>
-                                  );
-                                })()}
-                              </>
-                            )}
-                            {!isCurrentlySearching && !item.product && item.matchMethod && item.matchMethod !== "not_found" && (
-                              <>
-                                <MatchMethodBadge method={item.matchMethod} />
-                                {item.candidates.length > 0 && (
-                                  <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
-                                )}
-                              </>
-                            )}
+                                  )}
+                                </>
+                              )}
+                              {!isCurrentlySearching && !item.product && item.matchMethod && item.matchMethod !== "not_found" && (
+                                <>
+                                  <MatchMethodBadge method={item.matchMethod} />
+                                  {item.candidates.length > 0 && (
+                                    <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+
+                            <div className="mt-1 flex h-5 min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                              {!isCurrentlySearching && item.product && (
+                                <>
+                                  <StockBadge product={item.product} token={token} />
+                                  {item.product.status_sales_code && (() => {
+                                    const code = item.product!.status_sales_code!;
+                                    const variant = getStatusVariant(code);
+                                    const variantClass = {
+                                      green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+                                      amber: "border-amber-200 bg-amber-50 text-amber-700",
+                                      red:   "border-red-200 bg-red-50 text-red-600",
+                                      gray:  "border-kv-gray-200 bg-kv-gray-100 text-kv-gray-500",
+                                    }[variant];
+                                    const dotClass = {
+                                      green: "bg-emerald-500",
+                                      amber: "bg-amber-400",
+                                      red: "bg-red-500",
+                                      gray: "bg-kv-gray-300",
+                                    }[variant];
+                                    const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
+                                    return (
+                                      <span
+                                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
+                                        title={item.product!.status_sales_text ?? code}
+                                      >
+                                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
+                                        {label}
+                                      </span>
+                                    );
+                                  })()}
+                                </>
+                              )}
+                              {rowNote && (
+                                <span
+                                  className={`inline-flex max-w-[180px] items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                    rowNote.tone === "amber"
+                                      ? "border-amber-200 bg-amber-50 text-amber-700"
+                                      : "border-red-200 bg-red-50 text-red-600"
+                                  }`}
+                                >
+                                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${rowNote.tone === "amber" ? "bg-amber-400" : "bg-red-500"}`} />
+                                  <span className="truncate">{rowNote.text}</span>
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          {item.priceNote && !isCurrentlySearching && (
-                            <div className="mt-1 flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
-                              <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-                              </svg>
-                              <span className="truncate">{item.priceNote}</span>
-                            </div>
-                          )}
-                          {!isCurrentlySearching && item.exactLookupAttempted && !item.exactLookupFound && item.matchType === "not_found" && item.candidates.length === 0 && (
-                            <div className="mt-1 flex items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-[11px] text-red-600 border border-red-200">
-                              <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
-                              </svg>
-                              <span>EAN/kód nenalezen v katalogu</span>
-                            </div>
-                          )}
+                          </div>{/* end description+badges group */}
                         </div>{/* end min-w-0 flex-1 */}
                     </div>{/* end flex items-center gap-2 */}
                   </td>
-                  <td className="border-l border-kv-gray-100 px-5 py-2.5 text-right align-top pt-3">
+                  <td className="border-l border-kv-gray-100 px-3 py-2 text-right align-top">
                     <StatusBadge
                       type={isCurrentlySearching ? "processing" : item.matchType}
                       confidence={isCurrentlySearching ? undefined : item.confidence}
                       confirmed={isReviewed}
                     />
                   </td>
-                  <td className="border-l border-kv-gray-100 px-5 py-2.5 text-center align-top pt-2">
+                  <td className="border-l border-kv-gray-100 px-3 py-2 text-center align-top">
                     <div className="flex items-center justify-center gap-1">
                       {!isCurrentlySearching && !isSetParent && onQuickConfirm && item.product && (
                         <button
