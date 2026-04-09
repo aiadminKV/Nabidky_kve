@@ -19,6 +19,7 @@ import { rateLimiter } from "./middleware/rateLimiter.js";
 import { userQueueMiddleware } from "./middleware/userQueue.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { notify, registerChannel, createGoogleChatChannel } from "./services/notifier.js";
+import { qdrantHealthCheck } from "./services/qdrantSearch.js";
 
 const app = new Hono();
 
@@ -121,5 +122,24 @@ serve(
       notify({ level: "info", title: "Backend started", details: `Port ${info.port}`, source: "startup" });
     }
     startSyncCron();
+
+    // Qdrant connectivity check on startup
+    qdrantHealthCheck().then((result) => {
+      if (result.ok) {
+        logger.info({ pointsCount: result.pointsCount }, "Qdrant connected");
+      } else {
+        logger.error({ err: result.error }, "Qdrant unreachable on startup");
+        if (isProduction) {
+          notify({
+            level: "critical",
+            title: "Qdrant nedostupný",
+            details: `Qdrant search nebude fungovat: ${result.error}`,
+            source: "startup",
+          });
+        }
+      }
+    }).catch((err) => {
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, "Qdrant health check failed on startup");
+    });
   },
 );

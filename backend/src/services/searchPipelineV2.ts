@@ -6,6 +6,7 @@
 
 import OpenAI from "openai";
 import { env } from "../config/env.js";
+import { logger } from "./logger.js";
 import {
   searchProductsAgentFulltext,
   lookupProductsExact,
@@ -623,7 +624,10 @@ async function handleSearchProducts(
 
   const semanticResults = await searchProductsQdrant(
     embedding, 40, 0.15, undefined, manufacturerFilter ?? undefined, undefined, stockOpts,
-  ).catch(() => [] as SemanticResult[]);
+  ).catch((err) => {
+    logger.error({ err: err instanceof Error ? err.message : String(err), query }, "Qdrant search failed");
+    return [] as SemanticResult[];
+  });
 
   const combined = semanticResults.slice(0, 40).map((r) => ({
     sku: r.sku, name: r.name, unit: r.unit,
@@ -647,7 +651,10 @@ async function handleSearchFulltext(
 ): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
   const results = await searchProductsAgentFulltext(
     query, 40, undefined, manufacturerFilter ?? undefined, undefined, stockOpts,
-  ).catch(() => [] as AgentFulltextResult[]);
+  ).catch((err) => {
+    logger.error({ err: err instanceof Error ? err.message : String(err), query }, "Fulltext search failed");
+    return [] as AgentFulltextResult[];
+  });
 
   const combined = results.slice(0, 40).map((r) => ({
     sku: r.sku, name: r.name, unit: r.unit,
@@ -665,7 +672,10 @@ async function handleSearchFulltext(
 }
 
 async function handleLookupExact(code: string): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
-  const results = await lookupProductsExact(code, 5).catch(() => [] as ExactResult[]);
+  const results = await lookupProductsExact(code, 5).catch((err) => {
+    logger.error({ err: err instanceof Error ? err.message : String(err), code }, "Exact lookup failed");
+    return [] as ExactResult[];
+  });
   const products = results.map((r) => ({
     sku: r.sku, name: r.name, unit: r.unit,
     match_type: r.match_type, matched_value: r.matched_value,
@@ -687,7 +697,10 @@ async function handleSearchByCategory(
 
   const semanticResults = await searchProductsQdrant(
     embedding, 40, 0.15, undefined, manufacturerFilter ?? undefined, category, stockOpts,
-  ).catch(() => [] as SemanticResult[]);
+  ).catch((err) => {
+    logger.error({ err: err instanceof Error ? err.message : String(err), query, category }, "Qdrant category search failed");
+    return [] as SemanticResult[];
+  });
 
   const combined = semanticResults.slice(0, 40).map((r) => ({
     sku: r.sku, name: r.name, unit: r.unit,

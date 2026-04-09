@@ -42,9 +42,14 @@ let _client: QdrantClient | null = null;
 
 export function getQdrantClient(): QdrantClient {
   if (!_client) {
-    const url = process.env.QDRANT_URL ?? "http://localhost:6333";
+    const rawUrl = process.env.QDRANT_URL ?? "http://localhost:6333";
     const apiKey = process.env.QDRANT_API_KEY;
-    _client = new QdrantClient({ url, ...(apiKey ? { apiKey } : {}), checkCompatibility: false });
+    // @qdrant/js-client-rest defaults port to 6333 if none is in the URL.
+    // For HTTPS cloud URLs (Railway, Qdrant Cloud) we must explicitly set port=443.
+    const parsed = new URL(rawUrl);
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 6333);
+    const url = `${parsed.protocol}//${parsed.hostname}${parsed.pathname !== "/" ? parsed.pathname : ""}`;
+    _client = new QdrantClient({ url, port, ...(apiKey ? { apiKey } : {}), checkCompatibility: false });
   }
   return _client;
 }
