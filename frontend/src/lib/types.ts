@@ -68,6 +68,10 @@ export interface ParsedItem {
   unit: string | null;
   quantity: number | null;
   extraColumns?: Record<string, string>;
+  /** When true, the item is treated as a set and decomposed into components during search */
+  isSet?: boolean;
+  /** When true, the item is excluded from search entirely */
+  skip?: boolean;
 }
 
 /** Pre-search configuration that flows into the pipeline */
@@ -140,6 +144,10 @@ export interface OfferItem {
   parentItemId?: string | null;
   /** Component role within a set (mechanism, cover, frame, etc.) */
   componentRole?: string | null;
+  /** Manufacturer filter applied during search (from SearchPlan groupContext) */
+  appliedManufacturer?: string | null;
+  /** Product line filter applied during search */
+  appliedLine?: string | null;
 }
 
 /** SSE event from backend */

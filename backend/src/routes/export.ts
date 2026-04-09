@@ -459,8 +459,8 @@ exportRouter.post("/export/send-sap-email", authMiddleware, async (c) => {
       ],
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Odeslání emailu selhalo";
-    return c.json({ error: message }, 500);
+    (await import("../services/logger.js")).logger.error({ err: err instanceof Error ? err.message : String(err) }, "SAP email send failed");
+    return c.json({ error: "Odeslání emailu selhalo" }, 500);
   }
 
   return c.json({ ok: true, subject, filename });

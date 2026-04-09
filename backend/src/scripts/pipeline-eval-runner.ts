@@ -24,8 +24,8 @@ import {
   type EvalResult,
   type VariantSummary,
 } from "./pipeline-eval-framework.js";
-import { searchPipelineForItem, type ParsedItem } from "../services/searchPipeline.js";
 import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { ParsedItem } from "../services/types.js";
 import { runVariantA } from "./pipeline-variant-a.js";
 import { runVariantC } from "./pipeline-variant-c.js";
 import type { TestCase } from "./pipeline-test-data.js";
@@ -60,7 +60,7 @@ async function runBaseline(tc: TestCase, tracker: TokenTracker): Promise<Pipelin
     quantity: tc.quantity,
   };
 
-  const result = await searchPipelineForItem(item, tc.id);
+  const result = await searchPipelineV2ForItem(item, tc.id);
 
   // The current pipeline doesn't expose token counts via its API,
   // so we track 0 for baseline (cost is known from pipeline model config).

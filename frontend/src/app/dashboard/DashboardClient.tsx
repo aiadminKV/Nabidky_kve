@@ -1,17 +1,17 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { ChatPanel } from "@/components/ChatPanel";
 import { AgentDebugPanel } from "@/components/AgentDebugPanel";
-import { PasteConfirmModal } from "@/components/PasteConfirmModal";
+import { ColumnMapperModal } from "@/components/ColumnMapperModal";
 import { ParsedItemsTable } from "@/components/ParsedItemsTable";
 import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
-import { parsePastedText } from "@/lib/parsePaste";
-import { offerChat, searchItems, searchProducts, downloadXlsx, downloadSapXlsx, getSearchPlan, type SearchPlan } from "@/lib/api";
+import type { ParsedItem } from "@/lib/types";
+import { offerChat, searchItems, downloadXlsx, downloadSapXlsx, getSearchPlan, searchItemWithStockLevel, type SearchPlan } from "@/lib/api";
 import { SearchPlanPanel } from "@/components/SearchPlanPanel";
 import { PreSearchModal } from "@/components/PreSearchModal";
 import {
@@ -28,6 +28,7 @@ import {
   type ParsedItem,
   type Product,
   type SearchPreferences,
+  type StockLevel,
   type ToolCallStatus,
 } from "@/lib/types";
 
@@ -44,7 +45,6 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [searchingSet, setSearchingSet] = useState<Set<string>>(new Set());
   const [reviewItem, setReviewItem] = useState<OfferItem | null>(null);
   const [isParsingChat, setIsParsingChat] = useState(false);
-  const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [offerHeader, setOfferHeader] = useState<OfferHeader>({
@@ -62,7 +62,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
   const [cachedToken, setCachedToken] = useState("");
   const [preSearchOpen, setPreSearchOpen] = useState(false);
-  const [preSearchAction, setPreSearchAction] = useState<"full" | "not_found">("full");
+  const [preSearchAction, setPreSearchAction] = useState<"full">("full");
   const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [searchPreferences, setSearchPreferences] = useState<SearchPreferences>(DEFAULT_SEARCH_PREFERENCES);
@@ -423,9 +423,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     setPendingPaste(text);
   }, []);
 
-  const handlePasteImport = useCallback(() => {
-    if (!pendingPaste) return;
-    const items = parsePastedText(pendingPaste);
+  const handlePasteImport = useCallback((items: ParsedItem[]) => {
     if (phase === "review" && offerItems.length > 0) {
       const maxPos = Math.max(...offerItems.map((i) => i.position));
       const newOfferItems: OfferItem[] = items.map((item, i) => ({
@@ -450,7 +448,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       addMessage("system", `Rozpoznáno ${items.length} položek z tabulky. Zkontrolujte a klikněte Zpracovat.`);
     }
     setPendingPaste(null);
-  }, [pendingPaste, phase, offerItems, addMessage]);
+  }, [phase, offerItems, addMessage]);
 
   const handlePasteSendAsMessage = useCallback(() => {
     if (!pendingPaste) return;
@@ -470,8 +468,38 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const handleRunSearch = useCallback(async (
     items: ParsedItem[],
     prefs: SearchPreferences,
+    plan?: SearchPlan,
   ) => {
-    const emptyOfferItems: OfferItem[] = items.map((item, i) => ({
+    // Items marked as skip are excluded from the search batch entirely
+    const activeItems = items.filter((i) => !i.skip);
+    const activeEnrichedItems = plan ? plan.enrichedItems.filter((ei) => !ei.skip) : null;
+
+    const searchItems_ = activeEnrichedItems
+      ? activeEnrichedItems.map((ei) => ({
+          name: ei.name, unit: ei.unit, quantity: ei.quantity,
+          instruction: ei.instruction,
+          isSet: ei.isSet,
+          setHint: ei.setHint,
+        }))
+      : activeItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity, isSet: i.isSet }));
+
+    // groupContexts: only manufacturer/line set by user in SearchPlanPanel
+    const groupContexts: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }> | undefined =
+      activeEnrichedItems ? (() => {
+        const gc: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }> = {};
+        activeEnrichedItems.forEach((ei, i) => {
+          const group = plan?.groups[ei.groupIndex];
+          if (group?.suggestedManufacturer || group?.suggestedLine) {
+            gc[i] = {
+              preferredManufacturer: group.suggestedManufacturer ?? null,
+              preferredLine: group.suggestedLine ?? null,
+            };
+          }
+        });
+        return Object.keys(gc).length > 0 ? gc : undefined;
+      })() : undefined;
+
+    const emptyOfferItems: OfferItem[] = activeItems.map((item, i) => ({
       itemId: generateItemId(),
       position: i,
       originalName: item.name,
@@ -489,14 +517,17 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
     const batchIdMap = emptyOfferItems.map((i) => i.itemId);
     setSearchingSet(new Set(batchIdMap));
     setPhase("processing");
-    addMessage("system", `Vyhledávám ${items.length} položek v katalogu…`);
+    const skippedCount = items.length - activeItems.length;
+    const skippedNote = skippedCount > 0 ? ` (${skippedCount} přeskočeno)` : "";
+    addMessage("system", `Vyhledávám ${activeItems.length} položek v katalogu…${skippedNote}`);
 
     try {
       const token = await getToken();
       const stream = searchItems(
-        items.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity })),
+        searchItems_,
         token,
         prefs,
+        groupContexts,
       );
 
       for await (const event of stream) {
@@ -504,16 +535,76 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           const pos = event.data.position as number;
           const id = batchIdMap[pos];
           if (id) setSearchingSet((prev) => new Set(prev).add(id));
+        } else if (event.type === "set_matched") {
+          const setData = event.data as unknown as {
+            parentPosition: number;
+            parentItemId: string;
+            originalName: string;
+            unit: string | null;
+            quantity: number | null;
+            components: Array<{
+              name: string;
+              role: string;
+              quantity: number;
+              result: OfferItem;
+            }>;
+          };
+          const parentId = batchIdMap[setData.parentPosition];
+          if (parentId) {
+            setSearchingSet((prev) => { const next = new Set(prev); next.delete(parentId); return next; });
+            flashPosition(setData.parentPosition);
+            setOfferItems((prev) => {
+              const parentIdx = prev.findIndex((item) => item.itemId === parentId);
+              if (parentIdx === -1) return prev;
+
+              const parentItem: OfferItem = {
+                ...prev[parentIdx]!,
+                matchType: "match",
+                confidence: 100,
+                product: null,
+                candidates: [],
+                reasoning: `Sada rozložena na ${setData.components.length} komponent`,
+              };
+
+              const componentItems: OfferItem[] = setData.components.map((comp) => ({
+                itemId: generateItemId(),
+                position: setData.parentPosition,
+                originalName: comp.name,
+                unit: "ks",
+                quantity: (setData.quantity ?? 1) * comp.quantity,
+                matchType: comp.result.matchType,
+                confidence: comp.result.confidence,
+                product: comp.result.product,
+                candidates: comp.result.candidates ?? [],
+                reasoning: comp.result.reasoning,
+                priceNote: comp.result.priceNote,
+                reformulatedQuery: comp.result.reformulatedQuery,
+                pipelineMs: comp.result.pipelineMs,
+                parentItemId: parentId,
+                componentRole: comp.role,
+                reviewStatus: "ai_suggestion" as const,
+              }));
+
+              const next = [...prev];
+              next.splice(parentIdx, 1, parentItem, ...componentItems);
+              return next;
+            });
+          }
         } else if (event.type === "item_matched") {
           const data = event.data as unknown as OfferItem;
           const id = batchIdMap[data.position];
           if (id) {
             setSearchingSet((prev) => { const next = new Set(prev); next.delete(id); return next; });
             flashPosition(data.position);
+            const gc = groupContexts?.[data.position];
             setOfferItems((prev) =>
               prev.map((item) =>
                 item.itemId === id
-                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
+                  ? {
+                      ...item, ...data, itemId: id, extraColumns: item.extraColumns,
+                      appliedManufacturer: gc?.preferredManufacturer ?? null,
+                      appliedLine: gc?.preferredLine ?? null,
+                    }
                   : item,
               ),
             );
@@ -548,72 +639,10 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   }, [parsedItems]);
 
   // Internal: direct search for not-found items with given prefs
-  const handleProcessNotFoundWithPrefs = useCallback(async (prefs: SearchPreferences) => {
-    const notFoundItems = offerItems.filter(
-      (i) => i.matchType === "not_found" && !i.confirmed,
-    );
-    if (notFoundItems.length === 0) return;
-
-    setIsSearchingSemantic(true);
-    const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
-    setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
-    addMessage("system", `Spouštím vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
-
-    try {
-      const token = await getToken();
-      const stream = searchItems(
-        notFoundItems.map((i) => ({
-          name: i.originalName,
-          unit: i.unit,
-          quantity: i.quantity,
-          position: i.position,
-        })),
-        token,
-        prefs,
-      );
-
-      for await (const event of stream) {
-        if (event.type === "item_matched") {
-          const data = event.data as unknown as OfferItem;
-          const id = posToIdMap.get(data.position);
-          if (id) {
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
-            setOfferItems((prev) =>
-              prev.map((item) =>
-                item.itemId === id
-                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns }
-                  : item,
-              ),
-            );
-          }
-        } else if (event.type === "status" && event.data.phase === "review") {
-          setSearchingSet(new Set());
-          addMessage("system", "Vyhledávání nenalezených položek dokončeno.");
-        } else if (event.type === "error") {
-          addMessage("system", `Chyba: ${event.data.message}`);
-        }
-      }
-    } catch (err) {
-      addMessage("system", `Chyba: ${err instanceof Error ? err.message : "Nastala chyba"}`);
-    } finally {
-      setSearchingSet(new Set());
-      setIsSearchingSemantic(false);
-    }
-  }, [offerItems, addMessage, getToken]);
-
-  // Called when user confirms settings → planning → search (or step-2 only for not_found)
+  // Called when user confirms settings → planning → search
   const handlePreSearchConfirm = useCallback(async (prefs: SearchPreferences) => {
     setPreSearchOpen(false);
     setSearchPreferences(prefs);
-
-    if (preSearchAction === "not_found") {
-      await handleProcessNotFoundWithPrefs(prefs);
-      return;
-    }
 
     const validItems = parsedItems.filter((i) => i.name.trim());
     setIsPlanLoading(true);
@@ -636,19 +665,7 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       setIsPlanLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preSearchAction, parsedItems, addMessage, getToken, handleRunSearch]);
-
-  // ──────────────────────────────────────────────────────────
-  // Handler: user clicks "Zpracovat nenalezené" → semantic search
-  // ──────────────────────────────────────────────────────────
-
-  // "Zpracovat nenalezené" — opens PreSearchModal, step 2 only
-  const handleProcessNotFound = useCallback(() => {
-    const notFoundItems = offerItems.filter((i) => i.matchType === "not_found" && !i.confirmed);
-    if (notFoundItems.length === 0) return;
-    setPreSearchAction("not_found");
-    setPreSearchOpen(true);
-  }, [offerItems]);
+  }, [parsedItems, addMessage, getToken, handleRunSearch]);
 
   // ──────────────────────────────────────────────────────────
   // Review handlers
@@ -679,19 +696,76 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
   const handleSkip = useCallback((item: OfferItem) => {
     setOfferItems((prev) =>
       prev.map((i) =>
-        i.itemId === item.itemId ? { ...i, confirmed: true } : i,
+        i.itemId === item.itemId
+          ? { ...i, originalName: item.originalName, quantity: item.quantity, unit: item.unit, confirmed: true }
+          : i,
       ),
     );
     setReviewItem(null);
   }, []);
 
-  const handleManualSearch = useCallback(
-    async (query: string): Promise<Product[]> => {
-      const token = await getToken();
-      return searchProducts(query, token);
+  const handleSearchWithStockLevel = useCallback(
+    async (item: OfferItem, level: StockLevel, opts?: { manufacturer?: string; branchCode?: string }) => {
+      setReviewItem(null);
+      setSearchingSet((prev) => new Set(prev).add(item.itemId));
+
+      const prefs = opts?.branchCode
+        ? { ...searchPreferences, branchFilter: opts.branchCode }
+        : searchPreferences;
+      const groupContext = opts?.manufacturer
+        ? { preferredManufacturer: opts.manufacturer, preferredLine: null }
+        : undefined;
+
+      try {
+        const sse = searchItemWithStockLevel(
+          { name: item.originalName, unit: item.unit, quantity: item.quantity },
+          cachedToken,
+          prefs,
+          groupContext,
+          level,
+        );
+        for await (const event of sse) {
+          if (event.type === "item_matched") {
+            const data = event.data as unknown as OfferItem;
+            setOfferItems((prev) =>
+              prev.map((i) =>
+                i.itemId === item.itemId
+                  ? { ...i, ...data, itemId: item.itemId, extraColumns: i.extraColumns, reviewStatus: "ai_suggestion" as const }
+                  : i,
+              ),
+            );
+          }
+        }
+      } finally {
+        setSearchingSet((prev) => {
+          const next = new Set(prev);
+          next.delete(item.itemId);
+          return next;
+        });
+      }
     },
-    [getToken],
+    [cachedToken, searchPreferences],
   );
+
+  const handleSaveEdits = useCallback((item: OfferItem) => {
+    setOfferItems((prev) =>
+      prev.map((i) =>
+        i.itemId === item.itemId
+          ? { ...i, originalName: item.originalName, quantity: item.quantity, unit: item.unit }
+          : i,
+      ),
+    );
+  }, []);
+
+  const handleQuickConfirm = useCallback((itemId: string) => {
+    setOfferItems((prev) =>
+      prev.map((i) =>
+        i.itemId === itemId
+          ? { ...i, confirmed: true, reviewStatus: "reviewed" as const, matchType: "match" as const, confidence: 100 }
+          : i,
+      ),
+    );
+  }, []);
 
   // ──────────────────────────────────────────────────────────
   // Export & reset
@@ -812,11 +886,11 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
       case "planning":
         return (
           <SearchPlanPanel
-            plan={searchPlan}
-            isLoading={isPlanLoading}
+            plan={searchPlan!}
+            token={cachedToken}
             onApprove={(plan) => {
               const validItems = parsedItems.filter((i) => i.name.trim());
-              handleRunSearch(validItems, searchPreferences);
+              handleRunSearch(validItems, searchPreferences, plan);
             }}
             onSkip={() => {
               const validItems = parsedItems.filter((i) => i.name.trim());
@@ -836,9 +910,8 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
             onExport={handleExport}
             onSendSap={() => {}}
             onReset={handleReset}
-            onProcessNotFound={handleProcessNotFound}
             onAddItem={handleAddItem}
-            isSearchingSemantic={isSearchingSemantic}
+            onQuickConfirm={handleQuickConfirm}
             token={cachedToken}
           />
         );
@@ -887,14 +960,15 @@ export function DashboardClient({ email, isAdmin }: DashboardClientProps) {
           onConfirm={handleConfirm}
           onSkip={handleSkip}
           onClose={() => setReviewItem(null)}
-          onManualSearch={handleManualSearch}
+          onSaveEdits={handleSaveEdits}
+          onSearchWithStockLevel={handleSearchWithStockLevel}
           token={cachedToken}
         />
       )}
 
       {/* TSV paste confirmation modal */}
       {pendingPaste && (
-        <PasteConfirmModal
+        <ColumnMapperModal
           text={pendingPaste}
           onImport={handlePasteImport}
           onSendAsMessage={handlePasteSendAsMessage}

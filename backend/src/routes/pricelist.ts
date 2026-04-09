@@ -16,7 +16,6 @@ import {
   type DiffSummary,
   type ColumnMapping,
 } from "../services/pricelist.js";
-import { cleanProductDescriptions } from "../services/embedding.js";
 
 type Env = {
   Variables: {
@@ -236,14 +235,6 @@ pricelistRouter.post("/pricelist/apply", authMiddleware, adminMiddleware, async 
         ? await parseCsvBuffer(cached.buffer, undefined, cached.columnMapping)
         : await parseExcelBuffer(cached.buffer, undefined, cached.columnMapping);
 
-      await stream.write(sseEvent("status", { phase: "cleaning_descriptions", message: "Čištění popisů produktů (AI)…" }));
-
-      const cleanedCount = await cleanProductDescriptions(products, async (event) => {
-        await stream.write(sseEvent(event.type, event.data));
-      });
-
-      await stream.write(sseEvent("clean_complete", { cleaned: cleanedCount }));
-
       await stream.write(sseEvent("status", { phase: "loading_db", message: "Načítání existujících SKU…" }));
 
       const dbSkus = await loadExistingSkus();
@@ -310,7 +301,7 @@ pricelistRouter.get("/pricelist/history", authMiddleware, adminMiddleware, async
     .limit(20);
 
   if (error) {
-    return c.json({ error: `Načtení historie selhalo: ${error.message}` }, 500);
+    return c.json({ error: "Načtení historie selhalo" }, 500);
   }
 
   return c.json({ uploads: data ?? [] });
@@ -345,7 +336,7 @@ pricelistRouter.get("/pricelist/products", authMiddleware, adminMiddleware, asyn
     .range(page * pageSize, (page + 1) * pageSize - 1);
 
   if (error) {
-    return c.json({ error: `Načtení produktů selhalo: ${error.message}` }, 500);
+    return c.json({ error: "Načtení produktů selhalo" }, 500);
   }
 
   return c.json({

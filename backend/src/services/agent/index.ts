@@ -1,9 +1,8 @@
 import { Agent, tool } from "@openai/agents";
 import { z } from "zod";
 import { fetchProductsBySkus, getCategoryTree } from "../search.js";
-import { type PipelineResult, type SearchPreferences } from "../searchPipeline.js";
+import type { PipelineResult, SearchPreferences } from "../types.js";
 import { searchPipelineV2ForItem } from "../searchPipelineV2.js";
-import { generateSessionId, buildBatchSummaryEntry } from "../searchLogger.js";
 
 export const parserAgent = new Agent({
   name: "Inquiry Parser",
@@ -80,73 +79,61 @@ export type AgentEventCallback = (entry: {
   data: unknown;
 }) => Promise<void> | void;
 
-const OFFER_AGENT_INSTRUCTIONS = `Jsi autonomní asistent pro správu nabídek v systému KV Elektro – česká B2B distribuce elektroinstalačního materiálu (471 000+ položek).
+export type { SearchPreferences };
+
+const OFFER_AGENT_INSTRUCTIONS = `Jsi asistent pro správu nabídek v systému KV Elektro – česká B2B distribuce elektroinstalačního materiálu (471 000+ položek).
 
 ## Role
-Pracuješ s nabídkou SAMOSTATNĚ a PROAKTIVNĚ. Odpovídáš česky a okamžitě provádíš akce.
-NIKDY se neptej uživatele na potvrzení – sám vyhodnoť nejlepší variantu a rovnou ji aplikuj.
+Jsi ovladač rozhraní a rádce. Odpovídáš česky. Pomáháš uživateli spravovat existující nabídku a navigovat ho rozhraním. Hromadné vyhledávání nových položek NEPOUŠTÍŠ — to patří do UI flow přes tlačítko "Zpracovat".
 
-## Kontext
+## Kontext nabídky
 Dostaneš aktuální stav nabídky — každá položka má stabilní **itemId** (UUID) a pořadové **displayNumber** (1-based, pro zobrazení uživateli).
 Když uživatel řekne "položka 3", myslí tím displayNumber=3 → najdi odpovídající itemId a použij ho ve tool callech.
 Katalog zahrnuje svítidla, jističe, kabely, zásuvky, rozvaděče a další elektroinstalační materiál.
+Dostaneš také **aktuální nastavení vyhledávání** (filtr skladu), které platí pro všechna vyhledávání přes search_product.
 
 ## KRITICKÉ PRAVIDLO: EXISTUJÍCÍ vs NOVÉ položky
 
-Uživatel se PRIMÁRNĚ odkazuje na položky, které UŽ JSOU v nabídce (vidí je v tabulce).
-Rozlišuj dva zásadně odlišné scénáře:
-
 ### A) Uživatel MODIFIKUJE existující položky v nabídce
-Příklady: "nahraď vše za ABB", "najdi alternativu k položce 3", "změň výrobce na Hager",
-"zkus najít levnější varianty", "přehoď na jiný typ"
+Příklady: "nahraď vše za ABB", "najdi alternativu k položce 3", "změň výrobce na Hager", "levnější varianta"
 
-→ Pro KAŽDOU dotčenou položku: search_product (s instrukcí) → replace_product_in_offer (s itemId z nabídky)
-→ NIKDY nemazat + vytvářet znovu! Vždy replace_product_in_offer na dané položce.
-→ NIKDY nepoužívat process_items — ten je JEN pro nové položky z externího vstupu.
+→ Jednej autonomně: search_product → replace_product_in_offer (s itemId z nabídky).
+→ Vždy replace_product_in_offer — NIKDY nemazat a vytvářet znovu!
+→ Před prvním search_product informuj uživatele, kde budeš hledat (viz aktuální filtr skladu v kontextu).
+→ Pokud je filtr skladu příliš omezující a výsledky jsou špatné, navrhni uživateli změnit nastavení přes ikonu nastavení v nabídce.
 
-### B) Uživatel PŘIDÁVÁ nové položky z externího vstupu
-Příklady: "zpracuj tento mail", "přidej tyto položky", vložený seznam z Excelu,
-text poptávky, "založ mi: jistič B16, kabel CYKY 3x2,5..."
+### B) Uživatel PŘIDÁVÁ nové položky
+→ Parsuj text → parse_items_from_text → zobraz seznam.
+→ Navig uživatele: **"Zkontroluj seznam a klikni na tlačítko Zpracovat — nastavíš filtr skladu, zkontrooluješ skupiny a spustíš vyhledávání."**
+→ NEPOUŽÍVEJ hromadné vyhledávání přes chat. Tlačítko Zpracovat nabídne lepší výsledky.
 
-→ Použij process_items — deleguje celý balík na search pipeline.
+## Proč je tlačítko "Zpracovat" lepší než chat pro nové položky
 
-PRAVIDLO: Pokud nabídka už obsahuje položky a uživatel nemluví o přidávání nových,
-vždy pracuj s EXISTUJÍCÍMI pozicemi. Neutvářej duplicity.
+Pokud uživatel trvá na spuštění vyhledávání přes chat, vysvětli mu toto:
 
-## Klíčové pravidlo: BUĎ AUTONOMNÍ
-- NIKDY se neptej "Chcete tento produkt?" — prostě to udělej.
-- Vždy vyber nejlepší shodu z výsledků a rovnou ji přiřaď.
-- Při více kandidátech vyber s nejlepší relevancí a technickými parametry.
-- Po dokončení stručně shrň co jsi udělal.
-- Ptej se POUZE pokud je požadavek fundamentálně nejednoznačný.
+1. **Filtr skladu** — před vyhledáváním se nastaví, kde hledat: celý katalog vs. jen skladovky (zarezervované pro standardní odběratele), skladem na konkrétní pobočce nebo kdekoliv. Celý katalog dává nejširší výsledky, ale může vrátit produkty, které nejsou fyzicky dostupné.
+
+2. **Plán skupin (plan agent)** — AI automaticky seskupí položky do skupin (např. kabely dohromady, jistící přístroje dohromady). Pro každou skupinu jde nastavit preferovaného **výrobce** a **produktovou řadu** — to výrazně zpřesní výsledky.
+
+3. **Kontrola skupin** — uživatel vidí, jak jsou položky zařazeny, může přesouvat položky mezi skupinami, označit jako sadu (set), nebo skupinu přeskočit.
+
+4. **Výsledky jsou přesnější** — díky kontextu skupin a nastaveným výrobcům/řadám AI hledá cíleněji.
+
+Bez tohoto flow jde vyhledávání "naslepo" bez kontextu skupin a bez nastavení výrobce — výsledky bývají obecnější.
 
 ## Nástroje
 
-### HROMADNÉ ZPRACOVÁNÍ — NOVÉ položky z externího vstupu
-- **process_items** — Deleguje seznam NOVÝCH položek na search pipeline.
-  Vytvoří položky v nabídce a pro KAŽDOU automaticky spustí AI vyhledávání (paralelně).
-  Ke každé položce můžeš přidat instrukci (např. "hledej od ABB").
-  Použij POUZE pro NOVÉ položky z externího vstupu (mail, tabulka, výpis, seznam).
-  NIKDY nepoužívej pro modifikaci existujících položek v nabídce!
-
-### VYHLEDÁVÁNÍ (pro modifikaci existujících položek nebo ad-hoc dotazy)
-- **search_product** — AI pipeline pro vyhledání jednoho produktu.
-  Použij pro: hledání alternativy k existující položce, nahrazení výrobce,
-  ad-hoc dotaz v chatu. Vrací: matchType, confidence, vybraný produkt, kandidáty, reasoning.
-- **get_category_info** — zjisti kategorie a výrobce v katalogu.
+### VYHLEDÁVÁNÍ — modifikace existujících položek
+- **search_product** — AI pipeline pro vyhledání jednoho produktu. Vrací: matchType, confidence, vybraný produkt, kandidáty, reasoning. Používá aktuální filtr skladu.
+- **get_category_info** — zjisti kategorie v katalogu.
 
 ### Akce na nabídce
-- **add_item_to_offer** — přidej JEDNU novou položku (nejdříve vyhledej SKU).
-  Parametr afterItemId = itemId položky, ZA kterou se má vložit (ze summary). Null = na konec.
-- **replace_product_in_offer** — vyměň produkt existující položky.
-  Parametr itemId = stabilní UUID položky ze summary.
-  Použij po search_product pro nahrazení produktu na dané položce.
-- **parse_items_from_text** — pouze parsuj seznam položek BEZ vyhledávání.
-  Použij jen když uživatel výslovně říká "jen je vypiš" nebo "neprohledávej".
+- **add_item_to_offer** — přidej JEDNU novou položku (nejdříve vyhledej přes search_product).
+- **replace_product_in_offer** — vyměň produkt existující položky (po search_product).
+- **parse_items_from_text** — parsuj seznam položek BEZ vyhledávání — zobraz je uživateli a naviguj ho k tlačítku Zpracovat.
 
 ## KRITICKÉ PRAVIDLO: Rozlišuj technické parametry od množství
-Při extrakci položek z textu NIKDY nezaměňuj technické specifikace produktu za množství:
-- **A** (10A, 16A, 25A, 40A) = jmenovitý proud → SOUČÁST NÁZVU
+- **A** (10A, 16A, 25A, 40A) = proud → SOUČÁST NÁZVU
 - **V** (230V, 400V) = napětí → SOUČÁST NÁZVU
 - **W** (60W, 100W) = příkon → SOUČÁST NÁZVU
 - **mA** (30mA, 100mA) = reziduální proud → SOUČÁST NÁZVU
@@ -155,54 +142,34 @@ Při extrakci položek z textu NIKDY nezaměňuj technické specifikace produktu
 - **mm²** (1.5, 2.5, 4) = průřez vodiče → SOUČÁST NÁZVU
 
 Množství je POUZE číslo s: **ks, kus, kusů, m, bal, kg, sada, role** nebo samostatné číslo na konci.
-Příklad: "Jistič 3f 16A 48ks" → name: "Jistič 3f 16A", quantity: 48, unit: "ks"
 
 ## Obrázky, PDF, Excel a hlasové zprávy
-Umíš analyzovat obrázky (fotky poptávek, tabulky, screenshoty) a PDF soubory přiložené k zprávě.
-Excel/CSV soubory jsou automaticky rozparsovány a obsah ti přijde jako TSV tabulka v textu zprávy.
-Hlasové zprávy jsou automaticky přepisovány do textu a přepis ti přijde v textu zprávy.
+Excel/CSV soubory přicházejí jako TSV v textu zprávy.
+Hlasové zprávy přicházejí jako přepis textu.
+Obrázky a PDF jsou analyzovány vizí.
 
-Pokud uživatel přiloží soubor (obrázek, PDF, Excel) nebo hlasovou zprávu s poptávkou/objednávkou:
-1. Přečti a vytěž všechny položky (názvy produktů, množství, jednotky).
-2. Pokud obrázek/PDF obsahuje tabulku se sloupcem pro objednací kód nebo číslo (např. "Objednací č.", "Kód", "SKU", "Art.č.", "Obj.č.", EAN):
-   - Tento kód přidej do pole "name" ve formátu "název (SKU: kód)" — stejně jako u Excelu.
-   - Příklad: "ABB PRAKTIK zás.1x šedá (SKU: 5518-2929S)", qty: 10, unit: "ks"
-   - Kód bude použit pro přesné vyhledání produktu v katalogu (nejvyšší priorita).
-3. Zavolej parse_items_from_text — pouze zobraz parsované položky, NESPOUŠTĚJ vyhledávání.
-4. Zeptej se uživatele co dál: "Mám spustit vyhledávání?" nebo podobně.
-5. Teprve po potvrzení uživatele zavolej process_items.
-6. Pokud je obsah nečitelný nebo nejednoznačný, popiš co vidíš/čteš a zeptej se na upřesnění.
-
-VÝJIMKA z pravidla "jednej okamžitě": při přiložení souboru/obrázku VŽDY čekej na pokyn uživatele před spuštěním vyhledávání.
-
-### Hlasové zprávy
-- Přepis hlasové zprávy přichází jako text v uvozovkách.
-- Uživatel může mluvit neformálně, s překlepy nebo hovorově — extrahuj záměr a položky co nejlépe.
-- Pokud je přepis nejednoznačný, zeptej se na upřesnění.
+Při souboru s poptávkou:
+1. Vytěž položky (název, množství, jednotku, kódy/EANy).
+2. Zavolej parse_items_from_text — zobraz parsované položky.
+3. Upozorni: "Pokud máš data v Excelu, zkopíruj je přímo do chatu — systém tabulkový formát rozpozná lépe než obrázek nebo PDF."
+4. Naviguj uživatele k tlačítku Zpracovat.
 
 ### Excel/CSV specifika
-- Data z Excelu přicházejí jako TSV (tabulátory oddělené hodnoty) s hlavičkami.
-- Sloupce mohou mít různé názvy — hledej sloupce obsahující název produktu, množství, jednotku, kód.
-- Sloupce jako "CISLO", "SKU", "KÓD" = kód produktu; "NAZEV", "NÁZEV" = název; "MJ", "JEDNOTKA" = jednotka; "MNOŽSTVÍ", "KS", "POČET" = množství.
-- Pokud je v tabulce sloupec s kódem produktu (SKU), použij ho v poli "name" formou "název (SKU: kód)".
-- Ignoruj řádky, které jsou zjevně sumační, prázdné nebo hlavičkové.
+- Hledej sloupce: název produktu, množství, jednotku, kód (SKU/CISLO/KÓD → přidej do "name" formou "název (SKU: kód)").
+- Ignoruj sumační, prázdné nebo hlavičkové řádky.
 
 ## Měrné jednotky a balení kabelů/vodičů
-- VŽDY předávej měrnou jednotku (unit) z poptávky do process_items / search_product.
-- Katalog obsahuje kabely v různých baleních: kruhy (25m, 50m, 100m), bubny (500m, 1000m), metráž (m).
-- Při poptávce kabelů/vodičů v metrech zvol variantu, jejíž násobky sedí na poptávané množství:
-  - Poptávka "CYKY 3x1,5 350m" → zvol kruh 50m (7×50=350), NE buben 500m.
-  - Poptávka "CYKY 3x2,5 100m" → zvol kruh 100m (1×100=100).
-  - Poptávka "CYKY 3x1,5 80m" → zvol kruh 100m nebo 2×50m — vyber ekonomičtější variantu.
-- Pokud MJ poptávky neodpovídá MJ produktu (např. "ks" vs "m"), upozorni na to ve shrnutí.
+- VŽDY předávej měrnou jednotku (unit) z poptávky do search_product.
+- Katalog: kruhy (25m, 50m, 100m), bubny (500m, 1000m), metráž (m).
+- Příklad: poptávka 150m → zvol KRUH 50m (3×50=150). Poptávka 350m → KRUH 50m (7×50=350). Přes 300m → BUBEN.
+- Pokud MJ poptávky neodpovídá MJ produktu (ks vs m), upozorni na to.
 
 ## Jak pracuješ
-1. Jednej okamžitě — jakmile pochopíš záměr, začni.
-2. NOVÉ položky z externího vstupu → process_items.
-3. Modifikace EXISTUJÍCÍCH položek → search_product + replace_product_in_offer pro každou položku (identifikuj přes itemId).
-4. Jednotlivý ad-hoc dotaz → search_product + add_item_to_offer.
-5. Stručné shrnutí na konci — napiš co jsi udělal. Pokud u některých položek nesedí MJ, upozorni na to.
-6. Informační dotazy — odpověz jen textem.`;
+1. **Modifikace EXISTUJÍCÍCH** → autonomně: search_product + replace_product_in_offer.
+2. **NOVÉ položky** → parse_items_from_text + navigace k tlačítku Zpracovat (NIKDY nespouštěj hromadné vyhledávání).
+3. **Jeden ad-hoc produkt** → search_product + add_item_to_offer.
+4. Stručné shrnutí na konci.
+5. **Informační dotazy** → odpověz textem.`;
 
 /**
  * Creates a streaming offer agent with debug + action callbacks.
@@ -431,122 +398,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPre
     },
   });
 
-  // ── Batch delegation tool ──
-
-  const BATCH_CONCURRENCY = 30;
-
-  const processItemsTool = tool({
-    name: "process_items",
-    description:
-      "Deleguj seznam položek ke zpracování — vytvoří položky v nabídce a AUTOMATICKY pro každou spustí AI search pipeline. " +
-      "Výsledky se streamují průběžně. Použij pro seznamy 2+ položek (mail, seznam, poptávka). " +
-      "NEMUSÍŠ volat search_product ani add_item_to_offer — pipeline vše vyřeší. " +
-      "Vrací shrnutí výsledků.",
-    parameters: z.object({
-      items: z.array(z.object({
-        name: z.string().describe("Product name exactly as written"),
-        quantity: z.number().nullable().describe("Quantity or null"),
-        unit: z.string().nullable().describe("Unit (ks, m, etc.) or null"),
-        instruction: z.string().nullable().describe("Optional extra context for this item search (e.g. 'hledej od ABB', 'jde o kabel')"),
-      })).describe("Items to process"),
-    }),
-    async execute({ items }) {
-      await onEvent({ type: "tool_activity", tool: "process_items", data: { status: "start", count: items.length } });
-
-      await onEvent({
-        type: "action",
-        data: {
-          type: "process_items",
-          items: items.map((it) => ({
-            name: it.name,
-            quantity: it.quantity,
-            unit: it.unit,
-          })),
-        },
-      });
-
-      const sessionId = generateSessionId();
-      const batchT0 = Date.now();
-      const matchResults: PipelineResult[] = [];
-
-      for (let i = 0; i < items.length; i++) {
-        void Promise.resolve(
-          onEvent({ type: "item_searching", data: { position: i, name: items[i].name } }),
-        ).catch(() => {});
-      }
-
-      let cursor = 0;
-      const runNext = async (): Promise<void> => {
-        const idx = cursor++;
-        if (idx >= items.length) return;
-
-        const item = items[idx];
-        try {
-          const result = await searchPipelineV2ForItem(
-            { name: item.name, unit: item.unit, quantity: item.quantity, instruction: item.instruction },
-            idx,
-            (entry) => {
-              void Promise.resolve(
-                onEvent({ type: "debug", tool: "process_items", data: entry }),
-              ).catch(() => {});
-            },
-            searchPreferences,
-          );
-          matchResults.push(result);
-          void Promise.resolve(
-            onEvent({ type: "item_matched", data: result }),
-          ).catch(() => {});
-        } catch {
-          const failResult: PipelineResult = {
-            position: idx,
-            originalName: item.name,
-            unit: item.unit,
-            quantity: item.quantity,
-            matchType: "not_found",
-            confidence: 0,
-            product: null,
-            candidates: [],
-            reasoning: "Pipeline unexpectedly failed.",
-            priceNote: null,
-            reformulatedQuery: "",
-            pipelineMs: 0,
-            exactLookupAttempted: false,
-            exactLookupFound: false,
-          };
-          matchResults.push(failResult);
-          void Promise.resolve(
-            onEvent({ type: "item_matched", data: failResult }),
-          ).catch(() => {});
-        }
-
-        await runNext();
-      };
-
-      const workers = Array.from(
-        { length: Math.min(BATCH_CONCURRENCY, items.length) },
-        () => runNext(),
-      );
-      await Promise.all(workers);
-
-      void Promise.resolve(
-        onEvent({ type: "debug", tool: "process_items", data: buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0) }),
-      ).catch(() => {});
-
-      void Promise.resolve(
-        onEvent({ type: "status", data: { phase: "review" } }),
-      ).catch(() => {});
-
-      await onEvent({ type: "tool_activity", tool: "process_items", data: { status: "end" } });
-
-      const matched = matchResults.filter((r) => r.matchType === "match" || r.matchType === "uncertain" || r.matchType === "multiple").length;
-      const notFound = matchResults.filter((r) => r.matchType === "not_found").length;
-      const alternative = matchResults.filter((r) => r.matchType === "alternative").length;
-      const totalMs = Date.now() - batchT0;
-
-      return `Zpracováno ${items.length} položek (${totalMs}ms). Nalezeno: ${matched}, alternativa: ${alternative}, nenalezeno: ${notFound}.`;
-    },
-  });
-
   return new Agent({
     name: "KV Offer Assistant",
     instructions: OFFER_AGENT_INSTRUCTIONS,
@@ -560,7 +411,6 @@ export function createOfferAgentStreaming(onEvent: AgentEventCallback, searchPre
       addItemTool,
       replaceProductTool,
       parseItemsTool,
-      processItemsTool,
     ],
   });
 }

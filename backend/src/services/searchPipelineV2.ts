@@ -6,27 +6,29 @@
 
 import OpenAI from "openai";
 import { env } from "../config/env.js";
-import { generateQueryEmbedding } from "./embedding.js";
 import {
-  searchProductsSemantic,
-  searchProductsFulltext,
+  searchProductsAgentFulltext,
   lookupProductsExact,
   fetchProductsBySkus,
   getCategoryTree,
   type SemanticResult,
-  type FulltextResult,
+  type AgentFulltextResult,
   type ExactResult,
   type ProductResult,
   type CategoryTreeEntry,
   type StockFilterOptions,
 } from "./search.js";
+import {
+  searchProductsQdrant,
+  generateQueryEmbeddingLarge,
+} from "./qdrantSearch.js";
 import type {
   ParsedItem,
   PipelineResult,
   SearchPreferences,
   GroupContext,
   PipelineDebugFn,
-} from "./searchPipeline.js";
+} from "./types.js";
 
 const MODEL = "gpt-5.4-mini";
 
@@ -134,19 +136,68 @@ async function tryEanLookup(
 
 // ── Layer 2: Code Lookup + Checker ────────────────────────
 
+// Used ONLY for code-based matches — much more lenient than full checker.
+// EAN matches bypass the checker entirely (Layer 1 returns immediately).
+// Code matches are highly reliable; we only catch obvious nonsense.
+const CODE_CHECKER_PROMPT = `Zákazník poptává produkt a byl nalezen přes katalogový/objednací kód výrobce.
+Katalogový kód je specifický identifikátor — pokud byl nalezen, produkt téměř jistě odpovídá.
+
+Odmítni POUZE pokud jde o ZŘEJMÝ NESMYSL:
+- Typ produktu je úplně jiný (hledáme kabel, nalezeno svítidlo nebo jistič)
+- Nalezený produkt je z jiné kategorie než poptávka (např. hledáme vypínač, nalezena zásuvka)
+- Název produktu vůbec nesouvisí s poptávkou
+
+PŘIJMI vždy, pokud:
+- Produkt je ze stejné kategorie (vypínač = vypínač, kabel = kabel, rámeček = rámeček)
+- Liší se pouze barva, varianta, způsob montáže nebo drobný detail
+- Název produktu je zkrácený nebo v jiném formátu (SPINAC C.1 = jednopólový vypínač = OK)
+- Výrobce nebo řada se liší — to je přijatelné, kód je autoritativní
+
+Vrať VÝHRADNĚ JSON (bez dalšího textu):
+{"selected_ok": true, "selected_reason": "1 věta"}`;
+
 const CHECKER_PROMPT = `Jsi kontrolor kvality párování elektroinstalačních produktů. Dostaneš poptávku zákazníka a produkt(y) vybrané AI systémem.
 
 Tvůj úkol: ověřit, zda vybraný produkt i alternativy technicky odpovídají poptávce.
 
-Pravidla kontroly:
-- Musí sedět TYP produktu (jistič je jistič, kabel je kabel, vodič je vodič)
-- Musí sedět TVRDÉ PARAMETRY: průřez, počet žil, proud, počet pólů, charakteristika, typ kabelu
-- Průřez: číslo za "x" v označení kabelu. 1,5 mm² je úplně jiný produkt než 95 mm²
-- Počet žil: číslo před "x". 3-žilový kabel není 5-žilový kabel
-- Typ kabelu: CYKY (PVC) není CXKH (bezhalogenový). CY (drátový) není CYA (lanovaný). -J (s ochranným vodičem) není -O (bez)
-- Barva, výrobce, typ balení (BUBEN/KRUH) — tyto NEHODNOŤ jako chybu, pokud poptávka nespecifikuje
-- Drobné formátové odchylky v názvech jsou OK: prefix "1-", prefix "KABEL"/"VODIC"/"JISTIC", "×" vs "x"
-- Pokud je u produktu vyplněno pole "description", využij ho jako dodatečný kontext pro ověření parametrů. Popis může obsahovat technické detaily, které nejsou zřejmé z názvu.
+## Kategorie 1 — Kabely a vodiče
+- Musí sedět PRŮŘEZ: číslo za "x" v označení. 1,5 mm² ≠ 95 mm². Každý rozdíl = špatný produkt.
+- Musí sedět POČET ŽIL: číslo před "x". 3-žilový ≠ 5-žilový.
+- Musí sedět TYP KABELU: CYKY (PVC) ≠ CXKH (bezhalogenový). CY ≠ CYA. -J ≠ -O.
+- Typ balení (BUBEN/KRUH) — nehodnoť jako chybu, pokud poptávka neurčuje.
+
+### Barevné varianty jednožílových vodičů
+Jednožílové vodiče (CY, CYA, H07V-K, H07V-U, AYKY a podobné) existují v barevných provedeních.
+Barva bývá uvedena v názvu (C=černá, ZZ=žlutozelená, M=modrá, R=rudá, HN=hnědá, SE=šedá…) i v poli description — VŽDY zkontroluj description pro zjištění barvy produktu.
+Pokud poptávka EXPLICITNĚ NEUVÁDÍ barvu (ani zkratkou, ani slovem) A vybraný produkt má v názvu nebo description konkrétní barvu A alternativy jsou stejný vodič v jiných barvách → nastav selected_ok: false. Důvod: zákazník musí sám vybrat barvu.
+V takovém případě nastav alternatives_ok na VŠECHNY barevné varianty (všechny jsou technicky správné, jen barva není určena).
+
+## Kategorie 2 — Domovní přístroje (vypínače, zásuvky, stmívače, datové zásuvky)
+Česká katalogová názvosloví pro domovní přístroje:
+- SPINAC / PREPINAC = vypínač / přepínač
+- ZASUVKA = zásuvka
+- RAMECEK / JEDNORAMECEK / DVOJRAMECEK = rámeček
+- KRYT / KLAPKA / DESKA = kryt / krycí deska
+- C.1 = jednopólový vypínač, C.6 = schodišťový přepínač (č. 6), C.7 = křížový
+- SO / BEZ.SROUB = šroubovací / bezšroubový
+Pravidla:
+- Pokud poptávka říká "strojek vypínače" a produkt je SPINAC → TYP sedí. OK.
+- Pokud poptávka říká "kryt/krycí deska" a produkt je KRYT nebo KLAPKA → OK.
+- Pokud poptávka říká "rámeček" a produkt je RAMECEK → OK.
+- Výrobce a řada: pokud produkt obsahuje katalogový kód výrobce (např. 3558-A01340, SDN0100121) → považuj shodu za OK, kód je identifikátor konkrétní varianty.
+- Barvu (bílá, titán, antracit) a způsob montáže NEHODNOŤ jako chybu, pokud poptávka neurčuje.
+- Počet modulů/pozic: jednonásobný ≠ dvojnásobný (pokud poptávka určuje).
+
+## Kategorie 3 — Jistící přístroje (jističe, chrániče, svodiče)
+- Musí sedět PROUD: 10A ≠ 16A ≠ 32A.
+- Musí sedět POČET PÓLŮ: 1P ≠ 3P.
+- Musí sedět CHARAKTERISTIKA: B ≠ C ≠ D.
+- Citlivost chráničů: 30mA ≠ 100mA.
+
+## Obecná pravidla
+- Drobné formátové odchylky jsou OK: prefix "1-", prefix "KABEL"/"VODIC"/"JISTIC", "×" vs "x".
+- Pokud je vyplněno pole "description", využij ho jako dodatečný kontext.
+- Pokud si nejsi jistý kategorií produktu → buď benevolentní (selected_ok: true) pokud typ sedí.
 
 Vrať VÝHRADNĚ JSON:
 {
@@ -161,6 +212,10 @@ interface ProductForChecker {
   sku: string;
   name: string;
   description?: string | null;
+  category_main?: string | null;
+  category_sub?: string | null;
+  category_line?: string | null;
+  supplier_name?: string | null;
 }
 
 interface CheckerResult {
@@ -168,6 +223,31 @@ interface CheckerResult {
   selectedReason: string;
   alternativesOk: string[];
   alternativesFail: string[];
+}
+
+/** Lightweight checker for code-based matches — only rejects obvious nonsense. */
+async function runCodeChecker(
+  demand: string,
+  selected: ProductForChecker,
+): Promise<boolean> {
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      reasoning_effort: "low",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: CODE_CHECKER_PROMPT },
+        { role: "user", content: JSON.stringify({ demand, product: { sku: selected.sku, name: selected.name } }) },
+      ],
+    } as unknown as OpenAI.ChatCompletionCreateParamsNonStreaming);
+
+    const content = res.choices[0]?.message?.content;
+    if (!content) return true; // Default OK if unavailable
+    const p = JSON.parse(content) as { selected_ok?: boolean };
+    return p.selected_ok !== false; // Default to true unless explicitly false
+  } catch {
+    return true; // Default OK on any error
+  }
 }
 
 async function runChecker(
@@ -206,6 +286,7 @@ async function runChecker(
       selected_reason?: string;
       alternatives_ok?: string[];
       alternatives_fail?: string[];
+      alternatives_reasons?: Record<string, string>;
     };
     return {
       selectedOk: p.selected_ok ?? true,
@@ -240,23 +321,37 @@ async function tryCodeLookup(
       data: { code, resultCount: results.length, exactMatchCount: exactMatches.length },
     });
 
-    if (exactMatches.length === 1) {
-      const product = exactMatches[0];
-      const checkerResult = await runChecker(
-        demand, demandUnit, demandQuantity,
-        { sku: product.sku, name: product.name },
-        [],
-      );
+    if (exactMatches.length > 0) {
+      const primary = exactMatches[0]!;
+      const isIdnlf = primary.match_type === "idnlf_exact" || primary.match_type === "idnlf_normalized";
+
+      let ok: boolean;
+      if (isIdnlf) {
+        // IDNLF codes identify a product family, not a unique product — must run full checker
+        // to validate dimensions, conductor count, cross-section, etc.
+        const primaryForChecker: ProductForChecker = {
+          sku: primary.sku,
+          name: primary.name,
+          description: primary.description ?? null,
+          category_main: primary.category_main ?? null,
+          category_sub: primary.category_sub ?? null,
+          category_line: primary.category_line ?? null,
+          supplier_name: primary.supplier_name ?? null,
+        };
+        const checkerResult = await runChecker(demand, demandUnit, demandQuantity, primaryForChecker, []);
+        ok = checkerResult.selectedOk;
+      } else {
+        // SKU exact match is deterministic — lightweight check is sufficient.
+        ok = await runCodeChecker(demand, { sku: primary.sku, name: primary.name });
+      }
 
       onDebug?.({
         position: position ?? 0,
         step: "code_checker",
-        data: { sku: product.sku, checkerOk: checkerResult.selectedOk, reason: checkerResult.selectedReason },
+        data: { sku: primary.sku, checkerOk: ok, altCount: exactMatches.length - 1 },
       });
 
-      if (checkerResult.selectedOk) {
-        return product;
-      }
+      if (ok) return primary;
     }
   }
 
@@ -265,7 +360,7 @@ async function tryCodeLookup(
 
 // ── Layer 3/4: ReAct Agent ────────────────────────────────
 
-const AGENT_SYSTEM_PROMPT = `Jsi expert na vyhledávání a výběr elektroinstalačních produktů z B2B katalogu, který obsahuje přibližně 471 tisíc položek.
+const AGENT_SYSTEM_PROMPT = `Jsi expert na vyhledávání a výběr elektroinstalačních produktů z B2B katalogu.
 
 Zákazník poptává konkrétní produkt. Tvůj úkol je najít a vybrat technicky SPRÁVNÝ produkt z katalogu pomocí dostupných nástrojů.
 
@@ -273,15 +368,47 @@ Zákazník poptává konkrétní produkt. Tvůj úkol je najít a vybrat technic
 
 Krok 1: Analyzuj poptávku. Jaký typ produktu, jaké klíčové parametry (průřez, počet žil, proud, počet pólů...) a jestli v textu vidíš nějaký konkrétní kód.
 
-Krok 2: Použij search_products pro textové vyhledání. Zkus nejdřív přesný název z poptávky. Pokud výsledky nejsou dobré, zkus alternativní formulaci — v katalogu se kabely často značí s prefixem "1-" (například "1-CYKY-J" místo "CYKY-J") a vodiče se označují normou (H07V-K místo CYA).
+Krok 2: Vyber správný nástroj pro vyhledání:
+- **search_fulltext** — použij pro technická označení, typy kabelů, katalogové kódy (např. "1-CXKH-R-J 5x1,5", "PL6-B16", "H07V-K"). Hledá přesné tokeny v názvech produktů, je rychlejší a přesnější pro konkrétní technické výrazy.
+- **search_products** — použij pro obecnější nebo popisný dotaz, kde přesný název neznáš (např. "bezhalogenový kabel 5 žilový", "jednopólový jistič charakteristika B"). Využívá sémantické vyhledávání.
+
+Zkus nejdřív přesný název z poptávky. Pokud výsledky nejsou dobré, zkus alternativní formulaci — v katalogu se kabely často značí s prefixem "1-" (například "1-CYKY-J" místo "CYKY-J") a vodiče se označují normou (H07V-K místo CYA).
 
 Krok 3: Z výsledků vyhledávání vyber kandidáty, kteří přesně odpovídají požadovanému typu A všem tvrdým parametrům. Každý produkt ve výsledcích může mít pole "description" — ČTI ho, obsahuje klíčové technické detaily, které v názvu chybí (například přesný typ balení kabelu, IP krytí, výkon, barvu, technický standard).
 
-Krok 4: Pokud obecné vyhledávání vrací příliš široké výsledky (např. pro čidla, detektory, svítidla), použij list_categories pro nalezení správné kategorie a pak search_by_category pro cílené hledání v dané kategorii.
+Krok 4: Pokud obecné vyhledávání vrací příliš mnoho nesouvisejících produktů, použij kategoriový strom.
 
-Krok 5: Pokud si nejsi jistý parametry nějakého kandidáta a description není dostupný nebo je krátký, ověř detaily nástrojem get_product_detail.
+### Co vidíš ve výsledcích vyhledávání
+Každý produkt ve výsledcích má pole: category_main, category_sub, category_line.
+Přečti je — řeknou ti, ve které části katalogu se nalezené produkty nacházejí.
+Pokud vidíš, že výsledky jsou z různých category_main (míchají se různá odvětví), nebo jsou výsledky nesourodé a category_sub ukazuje špatnou oblast — je čas zúžit vyhledávání přes kategorie.
 
-Krok 6: Jakmile máš rozhodnutí, odevzdej výsledek přes submit_result.
+### Jak funguje kategoriový strom
+Katalog má 3 úrovně:
+  Úroveň 1 — HLAVNÍ KATEGORIE (nejširší, např. "Kabely a vodiče", "Jistící přístroje", "Svítidla")
+  Úroveň 2 — PODKATEGORIE (užší, např. "Silové kabely", "Jističe NN", "Průmyslová svítidla")
+  Úroveň 3 — PRODUKTOVÁ ŘADA (nejkonkrétnější)
+Každá kategorie má: code (číselný kód), name, level (1/2/3), parent (kód nadřazené).
+
+### Jak kategorii použít — postupuj shora dolů
+
+KROK A: Zavolej 'list_categories' BEZ parent_code → dostaneš všechny level-1 kategorie.
+  → Ze znalosti domény a z category_main co jsi viděl ve výsledcích vyber správnou hlavní kategorii.
+
+KROK B: Zavolej 'list_categories' s parent_code = kódem z kroku A → dostaneš podkategorie (level 2).
+  → Vyber nejbližší podkategorii.
+
+KROK C (volitelný): Zavolej 'list_categories' s parent_code z kroku B → produktové řady (level 3).
+
+KROK D: Zavolej 'search_by_category(query, code)' s kódem z nejkonkrétnější úrovně.
+  → Výsledky budou filtrovány pouze na danou kategorii.
+
+### Kdy to použít
+- Výsledky search_products mají různé category_main (různá odvětví se míchají)
+- Hledáš produkt snadno zaměnitelný s jiným typem (čidla, detektory, svítidla, spínače)
+- Obecný dotaz přináší příliš mnoho nesouvisejících výsledků
+
+Krok 5: Jakmile máš rozhodnutí, odevzdej výsledek přes submit_result.
 
 ## Tvrdé parametry — tyto MUSÍ přesně sedět
 
@@ -299,26 +426,65 @@ Krok 6: Jakmile máš rozhodnutí, odevzdej výsledek přes submit_result.
 
 **Datové kabely** — UTP je nestíněný, FTP je stíněný. Počet párů musí sedět. Jistič není pojistka — odlišný princip, nelze zaměnit.
 
-## Kabely a vodiče — povinné pravidlo pro balení
+## Kabely, vodiče a trubky — povinné pravidlo pro balení a délku
 
-Kabely a vodiče MUSÍ mít v názvu nebo popisu EXPLICITNĚ UVEDENÝ typ balení. Bez tohoto označení produkt NEVYBÍREJ — jde o neúplný záznam nebo jiný typ produktu.
+Kabely, vodiče a trubky MUSÍ mít v názvu nebo popisu EXPLICITNĚ UVEDENÝ typ balení. Bez tohoto označení produkt NEVYBÍREJ — jde o neúplný záznam nebo jiný typ produktu.
 
 Přijatelná označení balení:
-- **BUBEN** — kabel na metráž (pro velká množství nebo délky, kde kruh nevychází)
-- **KRUH** nebo konkrétní délka v názvu — například "50M", "KRUH 100M", "10 METRO" — pro malá množství
+- **BUBEN** — kabel na metráž (pro velká množství)
+- **KRUH** nebo konkrétní délka v názvu — například "KRUH 50M", "KRUH 100M", "25M", "10 METRO"
 - **M** nebo **METRO** na konci názvu — označuje metráž
-- Číselná délka za lomítkem nebo v závorce — například "100/", "(50M)"
+- Číselná délka za lomítkem nebo v závorce — například "/50M", "(25M)"
 
-Pokud zákazník poptává v metrech, porovnej množství s dostupnými délkami KRUHŮ. Vyber NEJVĚTŠÍ kruh, jehož délka se vejde do poptaného množství beze zbytku (například pro 80m vyber kruh 50m, ne kruh 100m). Pokud žádný kruh délkově nevyhovuje, vyber BUBEN.
+### Výběr správného balení podle poptávaného množství
+
+Pokud zákazník poptává v metrech nebo kusech s délkou, postupuj takto:
+
+1. Zjisti dostupné délky KRUHŮ pro daný produkt (typicky 10M, 25M, 35M, 50M, 100M).
+2. Najdi **největší délku kruhu**, která dělí poptávané množství BEZE ZBYTKU (tj. poptávané_množství mod délka_kruhu = 0).
+   - Příklad: poptávka 200m → 100M: 200/100=2 ✓, 50M: 200/50=4 ✓ → vyber KRUH 100M (největší)
+   - Příklad: poptávka 150m → 100M: 150/100=1,5 ✗, 50M: 150/50=3 ✓ → vyber KRUH 50M
+   - Příklad: poptávka 62m → 100M ✗, 50M ✗, 25M: 62/25=2,48 ✗ → žádný nevychází → BUBEN
+3. Pokud žádná délka kruhu nevychází beze zbytku → vyber **BUBEN**.
+4. Pokud poptávané množství přesahuje 300m → **vždy preferuj BUBEN** (objednávat mnoho kruhů je nepraktické).
 
 Produkty bez jakéhokoli označení balení v názvu ani v popisu ZAHRŇ do alternativ jen pokud nemáš nic lepšího, ale RADĚJI VRAŤ not_found než neúplný produkt.
 
-## Když najdeš více variant
+## Barva vodiče — povinné pravidlo
 
-Pokud najdeš více produktů, které se liší pouze v atributu, který zákazník nespecifikoval (například barva vodiče, typ bubnu), nastav matchType na "multiple" a selectedSku na null. V reasoning vysvětli, jaké varianty existují. Vrať je všechny jako alternativy.
+Barevné varianty se týkají pouze **jednožílových vodičů** (CY, CYA, H07V-K, CYME, AYKY a podobné s jednou žílou). Tyto produkty existují v různých barvách: žlutozelená (ZZ), černá, modrá, červená, hnědá, šedá, bílá atd.
+
+**Vícežílové kabely** (CYKY 3x..., CXKH 5x..., datové kabely a podobné) barvu zákazník NESPECIFIKUJE — barvy žil jsou pevně dány normou. U těchto produktů pravidlo barevných variant NEPLATÍ.
+
+Pro jednožílové vodiče:
+
+**Pokud barva NENÍ v poptávce explicitně uvedena** — ani zkratkou (ZZ, CRN, MOD, RUD...) ani slovem (žlutá, zelená, černá, modrá, červená...) — NIKDY nevybírej jednu konkrétní barvu jako primární výsledek. Nastav selectedSku na null, matchType na "multiple" a vrať VŠECHNY dostupné barevné varianty jako alternativy.
+
+**Pokud barva JE specifikována** — vyber produkt té barvy. Ostatní barvy NEZAHRNEJ do alternativ.
+
+## Když najdeš více variant z jiných důvodů
+
+Pokud najdeš více produktů lišící se v jiném nespecifikovaném atributu (např. výrobce, model), nastav matchType na "multiple" a selectedSku na null. V reasoning vysvětli, jaké varianty existují. Vrať je všechny jako alternativy.
 
 ## KLÍČOVÉ PRAVIDLO — technická správnost je jediná priorita
 IGNORUJ cenu, sklad, dostupnost. Tvůj JEDINÝ úkol je najít technicky správný produkt. Pokud najdeš více technicky správných produktů, vrať je VŠECHNY jako alternativy (max 10).
+
+## Pravidlo pro alternativeSkus — co SMÍŠ a NESMÍŠ zahrnout
+
+alternativeSkus MUSÍ být produkty se STEJNOU technickou specifikací jako poptávaný produkt.
+
+NESMÍŠ zahrnout:
+- Nižší standard: Cat5E NENÍ alternativa k Cat6. Cat6 NENÍ alternativa k Cat6A.
+- Jiný průřez: 1,5 mm² NENÍ alternativa k 2,5 mm².
+- Jiný typ kabelu: UTP NENÍ alternativa k FTP (a naopak).
+- Jiný typ balení pokud zákazník specifikuje délku: BUBEN NENÍ alternativa ke KRUHU 100M pokud zákazník chce přesnou délku.
+
+SMÍŠ zahrnout:
+- Stejný typ od jiného výrobce (pokud výrobce není specifikován)
+- Stejná specifikace, mírně odlišné označení modelu
+- Pokud zákazník nespecifikoval délku: jiné délky stejného kabelu (KRUH 50M i KRUH 100M)
+
+Pokud nemáš technicky správné alternativy — nech alternativeSkus prázdné. NIKDY nezahrnuj produkty, u kterých si nejsi 100% jistý technickou shodou.
 
 ## Důležitá pravidla
 - NIKDY si nevymýšlej SKU. Používej pouze kódy z výsledků vyhledávání.
@@ -352,11 +518,25 @@ function buildTools(): OpenAI.Responses.Tool[] {
       type: "function",
       strict: true,
       name: "search_products",
-      description: "Vyhledej produkty v katalogu podle textového dotazu. Vrací až 20 nejrelevantnějších produktů. Kombinuje sémantické a fulltextové vyhledávání.",
+      description: "Sémantické vyhledávání produktů — vhodné pro obecnější nebo popisné dotazy kde přesný název neznáš. Vrací až 20 nejrelevantnějších produktů. Pro technická označení a katalogové kódy použij search_fulltext.",
       parameters: {
         type: "object",
         properties: {
           query: { type: "string", description: "Textový dotaz pro vyhledání (název produktu, typ, parametry)" },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      strict: true,
+      name: "search_fulltext",
+      description: "Fulltextové vyhledávání produktů podle názvu. Hledá přesné tokeny v názvu produktu — vhodné pro technické označení jako '1-CXKH-R-J 5x1,5', 'PL6-B16', 'H07V-K', nebo přesné katalogové prefisy. Vrací až 40 výsledků seřazených podle textuální relevance.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Textový dotaz — technické označení, typ produktu, katalogový kód" },
         },
         required: ["query"],
         additionalProperties: false,
@@ -379,20 +559,6 @@ function buildTools(): OpenAI.Responses.Tool[] {
     {
       type: "function",
       strict: true,
-      name: "get_product_detail",
-      description: "Získej detailní informace o produktu podle SKU. Použij pro ověření parametrů kandidáta.",
-      parameters: {
-        type: "object",
-        properties: {
-          sku: { type: "string", description: "SKU produktu" },
-        },
-        required: ["sku"],
-        additionalProperties: false,
-      },
-    },
-    {
-      type: "function",
-      strict: true,
       name: "search_by_category",
       description: "Vyhledej produkty v katalogu s filtrem na konkrétní kategorii. Použij pokud obecné vyhledávání vrací příliš široké výsledky — například pro pohybové detektory, čidla, svítidla, spínače, zásuvky. Nejdřív získej seznam kategorií přes list_categories.",
       parameters: {
@@ -409,10 +575,16 @@ function buildTools(): OpenAI.Responses.Tool[] {
       type: "function",
       strict: true,
       name: "list_categories",
-      description: "Vrať strom kategorií produktů v katalogu. Každá kategorie má kód, název a úroveň. Použij pro nalezení správné kategorie produktu.",
+      description: "Vrať kategorie produktů z katalogu. Katalog má 3 úrovně: hlavní kategorie (level 1) → podkategorie (level 2) → produktová řada (level 3). Bez parametru vrátí pouze hlavní kategorie (level 1, ~15 položek). S parametrem parent_code vrátí přímé potomky dané kategorie. Procházej strom shora dolů — nejdřív hlavní kategorie, pak zavolej znovu s kódem vybrané kategorie pro podkategorie.",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          parent_code: {
+            type: ["string", "null"],
+            description: "Kód nadřazené kategorie, jejíž přímé potomky chceš zobrazit. Null nebo vynech pro zobrazení hlavních kategorií (level 1).",
+          },
+        },
+        required: ["parent_code"],
         additionalProperties: false,
       },
     },
@@ -447,50 +619,48 @@ async function handleSearchProducts(
   manufacturerFilter?: string | null,
   stockOpts?: StockFilterOptions,
 ): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
-  const embedding = await generateQueryEmbedding(query);
+  const embedding = await generateQueryEmbeddingLarge(query);
 
-  const [semanticResults, fulltextResults] = await Promise.all([
-    searchProductsSemantic(embedding, 20, 0.35, undefined, manufacturerFilter ?? undefined, undefined, stockOpts).catch(() => [] as SemanticResult[]),
-    searchProductsFulltext(query, 20, undefined, manufacturerFilter ?? undefined, undefined, stockOpts).catch(() => [] as FulltextResult[]),
-  ]);
+  const semanticResults = await searchProductsQdrant(
+    embedding, 40, 0.15, undefined, manufacturerFilter ?? undefined, undefined, stockOpts,
+  ).catch(() => [] as SemanticResult[]);
 
-  const seen = new Set<string>();
-  const combined: Array<{
-    sku: string; name: string; unit: string | null;
-    similarity: number; source: string;
-    category_sub: string | null; description: string | null;
-  }> = [];
+  const combined = semanticResults.slice(0, 40).map((r) => ({
+    sku: r.sku, name: r.name, unit: r.unit,
+    similarity: Math.round(r.cosine_similarity * 1000) / 1000,
+    source: "semantic",
+    category_main: r.category_main, category_sub: r.category_sub, category_line: r.category_line,
+    supplier_name: r.supplier_name, is_stock_item: r.is_stock_item,
+    description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
+  }));
 
-  for (const r of semanticResults) {
-    if (!seen.has(r.sku)) {
-      seen.add(r.sku);
-      combined.push({
-        sku: r.sku, name: r.name, unit: r.unit,
-        similarity: Math.round(r.cosine_similarity * 1000) / 1000,
-        source: "semantic",
-        category_sub: r.category_sub,
-        description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
-      });
-    }
-  }
-
-  for (const r of fulltextResults) {
-    if (!seen.has(r.sku)) {
-      seen.add(r.sku);
-      combined.push({
-        sku: r.sku, name: r.name, unit: r.unit,
-        similarity: Math.round((0.5 + Math.max(r.rank ?? 0, r.similarity_score ?? 0) * 0.3) * 1000) / 1000,
-        source: "fulltext",
-        category_sub: r.category_sub,
-        description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
-      });
-    }
-  }
-
-  const top20 = combined.slice(0, 20);
   return {
-    resultJson: JSON.stringify({ count: top20.length, products: top20 }),
-    products: top20.map((p) => ({ sku: p.sku, name: p.name })),
+    resultJson: JSON.stringify({ count: combined.length, products: combined }),
+    products: combined.map((p) => ({ sku: p.sku, name: p.name })),
+  };
+}
+
+async function handleSearchFulltext(
+  query: string,
+  manufacturerFilter?: string | null,
+  stockOpts?: StockFilterOptions,
+): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
+  const results = await searchProductsAgentFulltext(
+    query, 40, undefined, manufacturerFilter ?? undefined, undefined, stockOpts,
+  ).catch(() => [] as AgentFulltextResult[]);
+
+  const combined = results.slice(0, 40).map((r) => ({
+    sku: r.sku, name: r.name, unit: r.unit,
+    rank: Math.round(r.rank * 1000) / 1000,
+    source: "fulltext",
+    category_main: r.category_main, category_sub: r.category_sub, category_line: r.category_line,
+    supplier_name: r.supplier_name, is_stock_item: r.is_stock_item,
+    description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
+  }));
+
+  return {
+    resultJson: JSON.stringify({ count: combined.length, products: combined }),
+    products: combined.map((p) => ({ sku: p.sku, name: p.name })),
   };
 }
 
@@ -513,44 +683,43 @@ async function handleSearchByCategory(
   manufacturerFilter?: string | null,
   stockOpts?: StockFilterOptions,
 ): Promise<{ resultJson: string; products: Array<{ sku: string; name: string }> }> {
-  const embedding = await generateQueryEmbedding(query);
+  const embedding = await generateQueryEmbeddingLarge(query);
 
-  const [semanticResults, fulltextResults] = await Promise.all([
-    searchProductsSemantic(embedding, 15, 0.3, undefined, manufacturerFilter ?? undefined, category, stockOpts).catch(() => [] as SemanticResult[]),
-    searchProductsFulltext(query, 15, undefined, manufacturerFilter ?? undefined, category, stockOpts).catch(() => [] as FulltextResult[]),
-  ]);
+  const semanticResults = await searchProductsQdrant(
+    embedding, 40, 0.15, undefined, manufacturerFilter ?? undefined, category, stockOpts,
+  ).catch(() => [] as SemanticResult[]);
 
-  const seen = new Set<string>();
-  const combined: Array<{
-    sku: string; name: string; unit: string | null;
-    category_sub: string | null; description: string | null;
-  }> = [];
+  const combined = semanticResults.slice(0, 40).map((r) => ({
+    sku: r.sku, name: r.name, unit: r.unit,
+    category_main: r.category_main, category_sub: r.category_sub, category_line: r.category_line,
+    supplier_name: r.supplier_name, is_stock_item: r.is_stock_item,
+    description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
+  }));
 
-  for (const r of [...semanticResults, ...fulltextResults]) {
-    if (!seen.has(r.sku)) {
-      seen.add(r.sku);
-      combined.push({
-        sku: r.sku, name: r.name, unit: r.unit,
-        category_sub: r.category_sub,
-        description: r.description && r.description.trim().length > 5 ? r.description.slice(0, 300) : null,
-      });
-    }
-  }
-
-  const top20 = combined.slice(0, 20);
+  const top40 = combined.slice(0, 40);
   return {
-    resultJson: JSON.stringify({ count: top20.length, products: top20 }),
-    products: top20.map((p) => ({ sku: p.sku, name: p.name })),
+    resultJson: JSON.stringify({ count: top40.length, products: top40 }),
+    products: top40.map((p) => ({ sku: p.sku, name: p.name })),
   };
 }
 
 let cachedCategoryTree: CategoryTreeEntry[] | null = null;
 
-async function handleListCategories(): Promise<string> {
+async function handleListCategories(parentCode?: string | null): Promise<string> {
   if (!cachedCategoryTree) {
     cachedCategoryTree = await getCategoryTree();
   }
-  const simplified = cachedCategoryTree.map((c) => ({
+
+  let filtered: CategoryTreeEntry[];
+  if (parentCode) {
+    // Return direct children of the given parent code
+    filtered = cachedCategoryTree.filter((c) => c.parent_code === parentCode);
+  } else {
+    // Return only top-level categories (level 1) for a compact overview
+    filtered = cachedCategoryTree.filter((c) => c.level === 1);
+  }
+
+  const simplified = filtered.map((c) => ({
     code: c.category_code,
     name: c.category_name,
     level: c.level,
@@ -559,17 +728,6 @@ async function handleListCategories(): Promise<string> {
   return JSON.stringify({ count: simplified.length, categories: simplified });
 }
 
-async function handleGetProductDetail(sku: string): Promise<string> {
-  const products = await fetchProductsBySkus([sku]);
-  if (products.length === 0) return JSON.stringify({ error: "Produkt nenalezen" });
-  const p = products[0];
-  return JSON.stringify({
-    sku: p.sku, name: p.name, unit: p.unit,
-    category_main: p.category_main, category_sub: p.category_sub,
-    category_line: p.category_line, is_stock_item: p.is_stock_item,
-    description: p.description, supplier_name: p.supplier_name,
-  });
-}
 
 // ── ReAct agent runner ────────────────────────────────────
 
@@ -582,7 +740,7 @@ interface AgentResult {
   allDiscoveredProducts: Array<{ sku: string; name: string }>;
 }
 
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 20;
 
 async function runReactAgent(
   demand: string,
@@ -660,6 +818,21 @@ Rozvinutý název pro vyhledání: "${preprocessed.reformulated}"`;
           });
           break;
         }
+        case "search_fulltext": {
+          const ftResult = await handleSearchFulltext(args.query, manufacturerFilter, stockOpts);
+          result = ftResult.resultJson;
+          for (const p of ftResult.products) {
+            if (!allProducts.some((c) => c.sku === p.sku)) {
+              allProducts.push(p);
+            }
+          }
+          onDebug?.({
+            position: position ?? 0,
+            step: "agent_search_fulltext",
+            data: { query: args.query, manufacturer: manufacturerFilter, resultCount: ftResult.products.length },
+          });
+          break;
+        }
         case "lookup_exact": {
           const lookupResult = await handleLookupExact(args.code);
           result = lookupResult.resultJson;
@@ -686,18 +859,23 @@ Rozvinutý název pro vyhledání: "${preprocessed.reformulated}"`;
           break;
         }
         case "list_categories": {
-          result = await handleListCategories();
-          break;
-        }
-        case "get_product_detail": {
-          result = await handleGetProductDetail(args.sku);
+          const lcArgs = args as { parent_code?: string | null };
+          result = await handleListCategories(lcArgs.parent_code ?? null);
           break;
         }
         case "submit_result": {
           const altSkus: string[] = (args.alternativeSkus ?? []).slice(0, 10);
+          const resolvedMatchType = args.matchType ?? "not_found";
+          const agentSelectedSku: string | null = args.selectedSku ?? null;
+
+          // Structural guard: matchType "multiple" means agent found variants but couldn't
+          // pick one — selectedSku MUST be null regardless of what the LLM returned.
+          const resolvedSelectedSku = resolvedMatchType === "multiple" ? null : agentSelectedSku;
+
+
           finalResult = {
-            selectedSku: args.selectedSku ?? null,
-            matchType: args.matchType ?? "not_found",
+            selectedSku: resolvedSelectedSku,
+            matchType: resolvedMatchType,
             confidence: args.confidence ?? 0,
             reasoning: args.reasoning ?? "",
             alternativeSkus: altSkus,
@@ -777,6 +955,8 @@ export async function searchPipelineV2ForItem(
 ): Promise<PipelineResultV2> {
   const t0 = Date.now();
 
+  let hadEansOrCodes = false;
+
   const buildResult = (
     matchType: PipelineResultV2["matchType"],
     confidence: number,
@@ -803,7 +983,7 @@ export async function searchPipelineV2ForItem(
       priceNote: null,
       reformulatedQuery: reformulated,
       pipelineMs: Date.now() - t0,
-      exactLookupAttempted: true,
+      exactLookupAttempted: hadEansOrCodes,
       exactLookupFound: exactFound,
       matchMethod,
       stockContext: stockCtx,
@@ -826,6 +1006,7 @@ export async function searchPipelineV2ForItem(
     });
 
     const allCodes = [...new Set([...(item.extraLookupCodes ?? []), ...preprocessed.productCodes])];
+    hadEansOrCodes = preprocessed.eans.length > 0 || allCodes.length > 0;
 
     // ── Layer 1: EAN Lookup — 100% match, no checker needed ─
     const eanProduct = await tryEanLookup(preprocessed.eans, onDebug, position);
@@ -894,14 +1075,16 @@ export async function searchPipelineV2ForItem(
     const selectedProduct = agentResult.selectedSku
       ? productMap.get(agentResult.selectedSku) ?? null
       : null;
-    const selectedInfo: ProductForChecker | null = selectedProduct
-      ? { sku: selectedProduct.sku, name: selectedProduct.name, description: selectedProduct.description }
-      : null;
+    const toCheckerProduct = (p: ProductResult): ProductForChecker => ({
+      sku: p.sku, name: p.name,
+      description: p.description ?? null,
+      category_main: p.category_main, category_sub: p.category_sub, category_line: p.category_line,
+      supplier_name: p.supplier_name,
+    });
+    const selectedInfo: ProductForChecker | null = selectedProduct ? toCheckerProduct(selectedProduct) : null;
     const alternativeInfos: ProductForChecker[] = agentResult.alternativeSkus.flatMap((sku) => {
       const p = productMap.get(sku);
-      return p
-        ? [{ sku: p.sku, name: p.name, description: p.description ?? null }]
-        : [];
+      return p ? [toCheckerProduct(p)] : [];
     });
 
     // ── Checker ───────────────────────────────────────────
@@ -967,13 +1150,11 @@ export async function searchPipelineV2ForItem(
       const retryMap = new Map(retryProducts.map((p) => [p.sku, p]));
 
       const retrySelected = retryResult.selectedSku ? retryMap.get(retryResult.selectedSku) ?? null : null;
-      const retrySelectedInfo: ProductForChecker | null = retrySelected
-        ? { sku: retrySelected.sku, name: retrySelected.name, description: retrySelected.description }
-        : null;
+      const retrySelectedInfo: ProductForChecker | null = retrySelected ? toCheckerProduct(retrySelected) : null;
       const retryAlts: ProductForChecker[] = retryResult.alternativeSkus
         .map((sku) => retryMap.get(sku))
         .filter((p): p is ProductResult => p != null)
-        .map((p) => ({ sku: p.sku, name: p.name, description: p.description }));
+        .map(toCheckerProduct);
 
       // Checker on retry result
       if (retrySelected || retryAlts.length > 0) {

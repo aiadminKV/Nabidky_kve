@@ -59,9 +59,23 @@ export function ParsedItemsTable({
   }, [items]);
 
   const updateItem = useCallback(
-    (id: string, field: keyof ParsedItem, value: string | number | null) => {
+    (id: string, field: keyof ParsedItem, value: string | number | boolean | null) => {
       onItemsChange(
         items.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+      );
+    },
+    [items, onItemsChange],
+  );
+
+  const cycleItemState = useCallback(
+    (id: string) => {
+      onItemsChange(
+        items.map((item) => {
+          if (item.id !== id) return item;
+          if (!item.isSet && !item.skip) return { ...item, isSet: true, skip: false };
+          if (item.isSet) return { ...item, isSet: false, skip: true };
+          return { ...item, isSet: false, skip: false };
+        }),
       );
     },
     [items, onItemsChange],
@@ -159,26 +173,29 @@ export function ParsedItemsTable({
 
       {/* Editable table */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto custom-scrollbar">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm" style={{ minWidth: 988 }}>
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 w-10">#</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500">Název položky</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 w-20">MJ</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 w-24">Množství</th>
+              <th style={{ width: "2%" }} className="pl-1 pr-0" />
+              <th style={{ width: "3%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500">#</th>
+              <th style={{ width: "20%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500">Poptávka</th>
+              <th style={{ width: "11%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500">Množ.</th>
               {extraColumnKeys.map((key) => (
-                <th key={key} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 whitespace-nowrap">
+                <th key={key} style={{ width: "8%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 whitespace-nowrap">
                   {key}
                 </th>
               ))}
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500 w-12" />
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-500">Nalezený produkt</th>
+              <th style={{ width: "9%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-right text-xs font-medium text-kv-gray-500 whitespace-nowrap">Stav</th>
+              <th style={{ width: "7%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-center text-xs font-medium text-kv-gray-500 whitespace-nowrap">Akce</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-kv-gray-100">
             {items.map((item, idx) => (
-              <tr key={item.id} className="group">
-                <td className="px-4 py-2 text-xs text-kv-gray-400">{idx + 1}</td>
-                <td className="px-4 py-1.5">
+              <tr key={item.id} className={`group transition-opacity ${item.skip ? "opacity-40" : ""}`}>
+                <td className="w-6 pl-1 pr-0 py-2.5" />
+                <td className="px-4 py-2.5 text-xs text-kv-gray-400 align-top pt-3">{idx + 1}</td>
+                <td className="px-4 py-2.5 align-top">
                   <input
                     value={item.name}
                     onChange={(e) => updateItem(item.id, "name", e.target.value)}
@@ -186,25 +203,27 @@ export function ParsedItemsTable({
                     className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm text-kv-gray-800 outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
                   />
                 </td>
-                <td className="px-4 py-1.5">
-                  <UnitCell
-                    value={item.unit}
-                    onChange={(v) => updateItem(item.id, "unit", v)}
-                  />
-                </td>
-                <td className="px-4 py-1.5">
-                  <input
-                    type="number"
-                    value={item.quantity ?? ""}
-                    onChange={(e) =>
-                      updateItem(item.id, "quantity", e.target.value ? Number(e.target.value) : null)
-                    }
-                    placeholder="0"
-                    className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm text-kv-gray-600 tabular-nums outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
-                  />
+                <td className="px-4 py-2.5 align-top">
+                  <div className="flex items-start gap-2 pt-0.5 whitespace-nowrap">
+                    <input
+                      type="number"
+                      value={item.quantity ?? ""}
+                      onChange={(e) =>
+                        updateItem(item.id, "quantity", e.target.value ? Number(e.target.value) : null)
+                      }
+                      placeholder="0"
+                      className="w-20 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm text-kv-gray-600 tabular-nums outline-none transition-colors placeholder:text-kv-gray-300 hover:border-kv-gray-200 focus:border-kv-red/30 focus:bg-white focus:ring-1 focus:ring-kv-red/10"
+                    />
+                    <div className="w-14 shrink-0">
+                      <UnitCell
+                        value={item.unit}
+                        onChange={(v) => updateItem(item.id, "unit", v)}
+                      />
+                    </div>
+                  </div>
                 </td>
                 {extraColumnKeys.map((key) => (
-                  <td key={key} className="px-4 py-1.5">
+                  <td key={key} className="px-4 py-2.5 align-top">
                     <input
                       value={item.extraColumns?.[key] ?? ""}
                       onChange={(e) => updateExtraColumn(item.id, key, e.target.value)}
@@ -212,10 +231,54 @@ export function ParsedItemsTable({
                     />
                   </td>
                 ))}
-                <td className="px-4 py-1.5">
+                <td className="px-4 py-2.5 align-top">
+                  <div className="flex items-start gap-2 opacity-60">
+                    <div className="h-8 w-8 shrink-0 rounded bg-kv-gray-100" />
+                    <div className="min-w-0 flex-1 pt-0.5">
+                      <div className="h-4 rounded bg-kv-gray-100" />
+                      <div className="mt-1 h-4 rounded bg-kv-gray-50" />
+                      <div className="mt-1.5 h-10 rounded bg-kv-gray-50/70" />
+                    </div>
+                  </div>
+                </td>
+                <td className="border-l border-kv-gray-100 px-5 py-2.5 text-right align-top pt-3">
+                  <button
+                    type="button"
+                    onClick={() => cycleItemState(item.id)}
+                    title={
+                      item.skip ? "Přeskočit — kliknutím vrátíte do fronty" :
+                      item.isSet ? "Sada — kliknutím označíte jako přeskočit" :
+                      "Čeká — kliknutím označíte jako sadu"
+                    }
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                      item.skip
+                        ? "border-red-200 bg-red-50 text-red-500 hover:bg-red-100"
+                        : item.isSet
+                        ? "border-violet-300 bg-violet-100 text-violet-700 hover:bg-violet-200"
+                        : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400 hover:border-kv-gray-300 hover:bg-kv-gray-100 hover:text-kv-gray-600"
+                    }`}
+                  >
+                    {item.skip ? (
+                      <>
+                        <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
+                        </svg>
+                        Přeskočit
+                      </>
+                    ) : item.isSet ? (
+                      <>
+                        <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z" />
+                        </svg>
+                        Sada
+                      </>
+                    ) : "Čeká"}
+                  </button>
+                </td>
+                <td className="border-l border-kv-gray-100 px-5 py-2.5 text-center align-top pt-2">
                   <button
                     onClick={() => removeItem(item.id)}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg text-kv-gray-300 opacity-0 transition-all group-hover:opacity-100 hover:bg-kv-red-light hover:text-kv-red"
+                    className="mx-auto flex h-7 w-7 items-center justify-center rounded-lg text-kv-gray-300 opacity-0 transition-all group-hover:opacity-100 hover:bg-kv-red-light hover:text-kv-red"
                     title="Odebrat"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

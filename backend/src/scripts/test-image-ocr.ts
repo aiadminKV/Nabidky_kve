@@ -14,7 +14,8 @@
 import fs from "fs";
 import path from "path";
 import { extractTextFromImage } from "../services/imageOcr.js";
-import { extractProductCodes, searchPipelineForItem } from "../services/searchPipeline.js";
+import { extractProductCodes } from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
 import { lookupProductsExact } from "../services/search.js";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -214,7 +215,7 @@ async function testPipelineWithCodes() {
     sub(`Scénář: "${s.label}"`);
     info(`Vstup: "${s.name}" ${s.quantity} ${s.unit}`);
 
-    const result = await searchPipelineForItem(
+    const result = await searchPipelineV2ForItem(
       { name: s.name, unit: s.unit, quantity: s.quantity },
       0,
     );

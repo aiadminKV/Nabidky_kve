@@ -29,6 +29,10 @@ export interface FulltextResult extends ProductResult {
   similarity_score: number;
 }
 
+export interface AgentFulltextResult extends ProductResult {
+  rank: number;
+}
+
 export interface SemanticResult extends ProductResult {
   cosine_similarity: number;
 }
@@ -83,6 +87,36 @@ export async function searchProductsFulltext(
   }
 
   return (data ?? []) as FulltextResult[];
+}
+
+// ── Agent Fulltext Search (name-only, lightweight) ───────────
+
+export async function searchProductsAgentFulltext(
+  query: string,
+  maxResults = 40,
+  client?: SupabaseClient,
+  manufacturer?: string,
+  category?: string,
+  stockOpts?: StockFilterOptions,
+): Promise<AgentFulltextResult[]> {
+  const supabase = client ?? getAdminClient();
+
+  const rpcParams: Record<string, unknown> = {
+    search_query: query,
+    max_results: maxResults,
+  };
+  if (manufacturer) rpcParams.manufacturer_filter = manufacturer;
+  if (category) rpcParams.category_filter = category;
+  if (stockOpts?.stockItemOnly) rpcParams.stock_item_only = true;
+  if (stockOpts?.inStockOnly) rpcParams.in_stock_only = true;
+
+  const { data, error } = await supabase.rpc("search_products_agent_fulltext", rpcParams);
+
+  if (error) {
+    throw new Error(`Agent fulltext search failed: ${error.message}`);
+  }
+
+  return (data ?? []) as AgentFulltextResult[];
 }
 
 // ── Semantic Search ─────────────────────────────────────────

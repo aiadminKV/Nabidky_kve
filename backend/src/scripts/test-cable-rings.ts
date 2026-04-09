@@ -13,12 +13,8 @@
  *  4. Proč (pokud) vždy vybírá buben?
  */
 
-import {
-  searchPipelineForItem,
-  type PipelineResult,
-  type PipelineDebugFn,
-  type SearchPreferences,
-} from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { PipelineResult, PipelineDebugFn, SearchPreferences } from "../services/types.js";
 import {
   searchProductsFulltext,
   searchProductsSemantic,
@@ -161,7 +157,7 @@ async function runPipelineScenario(
     if (entry.step === "selector") selectorData = entry.data;
   };
 
-  const result: PipelineResult = await searchPipelineForItem(
+  const result: PipelineResult = await searchPipelineV2ForItem(
     { name, unit, quantity },
     0,
     onDebug,
@@ -401,7 +397,7 @@ async function testQuantityContext() {
     debugLog.push({ step: entry.step, data: entry.data });
   };
 
-  await searchPipelineForItem(
+  await searchPipelineV2ForItem(
     { name: "CYKY-J 3x2,5", unit: "m", quantity: 50 },
     0,
     onDebug,

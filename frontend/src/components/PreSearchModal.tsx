@@ -36,7 +36,7 @@ function branchLabel(b: Branch): string {
 
 export function PreSearchModal({ token, itemCount, onConfirm, onCancel }: PreSearchModalProps) {
   const [scope, setScope] = useState<Scope>("stock_items_only");
-  const [availability, setAvailability] = useState<Availability>("in_stock_anywhere");
+  const [availability, setAvailability] = useState<Availability>("none");
   const [branch, setBranch] = useState("");
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
@@ -72,7 +72,6 @@ export function PreSearchModal({ token, itemCount, onConfirm, onCancel }: PreSea
 
   const handleScopeChange = (s: Scope) => {
     setScope(s);
-    setAvailability("in_stock_anywhere");
     setBranch("");
   };
 
@@ -84,8 +83,15 @@ export function PreSearchModal({ token, itemCount, onConfirm, onCancel }: PreSea
   const pluralItems = itemCount === 1 ? "položka" : itemCount < 5 ? "položky" : "položek";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-kv-navy/50 backdrop-blur-sm p-4 sm:items-center">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl flex flex-col" style={{ height: "640px" }}>
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-kv-navy/50 backdrop-blur-sm p-4 sm:items-center"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl flex flex-col"
+        style={{ height: "640px" }}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="shrink-0 border-b border-kv-gray-100 px-6 py-5">
           <h2 className="text-base font-semibold text-kv-navy">Nastavení vyhledávání</h2>
@@ -258,12 +264,14 @@ export function PreSearchModal({ token, itemCount, onConfirm, onCancel }: PreSea
 
 function ScopeCard({
   active,
+  disabled,
   onClick,
   icon,
   label,
   description,
 }: {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
@@ -273,20 +281,23 @@ function ScopeCard({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={`relative flex flex-col items-start gap-2 rounded-xl border-2 px-4 py-3.5 text-left transition-all ${
-        active
-          ? "border-kv-navy bg-kv-navy/5"
-          : "border-kv-gray-200 hover:border-kv-gray-300 hover:bg-kv-gray-50"
+        disabled
+          ? "border-kv-gray-200 bg-kv-gray-50 opacity-40 cursor-not-allowed"
+          : active
+            ? "border-kv-navy bg-kv-navy/5"
+            : "border-kv-gray-200 hover:border-kv-gray-300 hover:bg-kv-gray-50"
       }`}
     >
-      {active && (
+      {active && !disabled && (
         <span className="absolute right-3 top-3 flex h-4 w-4 items-center justify-center rounded-full bg-kv-navy">
           <svg className="h-2.5 w-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
             <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
           </svg>
         </span>
       )}
-      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${active ? "bg-kv-navy/10 text-kv-navy" : "bg-kv-gray-100 text-kv-gray-500"}`}>
+      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${active && !disabled ? "bg-kv-navy/10 text-kv-navy" : "bg-kv-gray-100 text-kv-gray-500"}`}>
         {icon}
       </span>
       <span className="text-sm font-semibold text-kv-dark">{label}</span>

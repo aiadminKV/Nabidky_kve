@@ -1,11 +1,8 @@
 import "dotenv/config";
-import {
-  searchPipelineForItem,
-  type PipelineDebugFn,
-  type GroupContext,
-} from "../services/searchPipeline";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { PipelineDebugFn, GroupContext, SearchPreferences } from "../services/types.js";
 
-const PREFS = { offerType: "realizace" as const, stockFilter: "stock_items_only" as const };
+const PREFS: SearchPreferences = { stockFilter: "stock_items_only", branchFilter: null };
 
 interface TestCase {
   suite: string;
@@ -173,9 +170,9 @@ interface TestResult {
 
 async function runTest(tc: TestCase): Promise<TestResult> {
   const noop: PipelineDebugFn = () => {};
-  let result: Awaited<ReturnType<typeof searchPipelineForItem>> | undefined;
+  let result: Awaited<ReturnType<typeof searchPipelineV2ForItem>> | undefined;
   try {
-    result = await searchPipelineForItem(
+    result = await searchPipelineV2ForItem(
       { name: tc.input.name, unit: tc.input.unit ?? null, quantity: tc.input.quantity ?? null },
       0, noop, PREFS, tc.groupContext,
     );

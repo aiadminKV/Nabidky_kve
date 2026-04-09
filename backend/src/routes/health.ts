@@ -9,7 +9,7 @@ health.get("/health", async (c) => {
   try {
     const supabase = getAdminClient();
     const { error } = await supabase.from("products").select("id").limit(1);
-    checks.database = error ? `error: ${error.message}` : "ok";
+    checks.database = error ? "error" : "ok";
   } catch {
     checks.database = "unreachable";
   }

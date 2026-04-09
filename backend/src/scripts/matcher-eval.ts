@@ -9,12 +9,8 @@ import "dotenv/config";
 import { fileURLToPath } from "url";
 import * as path from "path";
 import OpenAI from "openai";
-import {
-  searchPipelineForItem,
-  DEFAULT_PREFERENCES,
-  type ParsedItem,
-  type PipelineResult,
-} from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import { DEFAULT_PREFERENCES, type ParsedItem, type PipelineResult } from "../services/types.js";
 import { getAdminClient } from "../services/supabase.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -222,7 +218,7 @@ async function main() {
 
     let pipelineResult: PipelineResult;
     try {
-      pipelineResult = await searchPipelineForItem(
+      pipelineResult = await searchPipelineV2ForItem(
         { name: tc.demand, quantity: tc.quantity, unit: tc.unit },
         0,
         undefined,

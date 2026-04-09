@@ -21,7 +21,8 @@ import { getAdminClient } from "../services/supabase.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-import { searchPipelineForItem, type PipelineDebugFn } from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { PipelineDebugFn } from "../services/types.js";
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -195,7 +196,7 @@ async function auditItem(row: CsvRow, skuExists: boolean): Promise<AuditResult> 
   };
 
   try {
-    const result = await searchPipelineForItem(
+    const result = await searchPipelineV2ForItem(
       { name: row.name, unit: row.unit, quantity: row.quantity },
       0,
       onDebug,

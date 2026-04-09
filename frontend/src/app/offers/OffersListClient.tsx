@@ -294,8 +294,20 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
 
       {/* Create Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => {
+            setShowCreateModal(false);
+            setNewTitle("");
+            setNewCustomerId("");
+            setNewCustomerIco("");
+            setNewCustomerName("");
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6">
             <h3 className="text-sm font-black text-kv-navy uppercase tracking-widest">Nová nabídka</h3>
             <p className="mt-1 text-sm text-kv-gray-400">
@@ -395,8 +407,14 @@ export function OffersListClient({ email, isAdmin }: OffersListClientProps) {
 
       {/* Delete Confirmation Modal */}
       {deleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setDeleteId(null)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
               <svg className="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />

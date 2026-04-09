@@ -40,7 +40,8 @@ customersRouter.get("/customers/search", authMiddleware, async (c) => {
     .limit(limit);
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    (await import("../services/logger.js")).logger.error({ err: error.message }, "customers search failed");
+    return c.json({ error: "Nepodařilo se vyhledat zákazníky" }, 500);
   }
 
   return c.json({ customers: data ?? [] });

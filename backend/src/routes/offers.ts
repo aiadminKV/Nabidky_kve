@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { getAdminClient } from "../services/supabase.js";
+import { getCachedCategoryTree } from "../services/searchPipeline.js";
+import { logger } from "../services/logger.js";
 
 type Env = {
   Variables: {
@@ -29,7 +31,8 @@ offers.get("/offers", authMiddleware, async (c) => {
     .eq("user_id", user.id);
 
   if (countError) {
-    return c.json({ error: countError.message }, 500);
+    logger.error({ err: countError.message }, "offers count failed");
+    return c.json({ error: "Nepodařilo se načíst nabídky" }, 500);
   }
 
   const { data, error } = await supabase
@@ -40,7 +43,8 @@ offers.get("/offers", authMiddleware, async (c) => {
     .range(offset, offset + limit - 1);
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    logger.error({ err: error.message }, "offers list failed");
+    return c.json({ error: "Nepodařilo se načíst nabídky" }, 500);
   }
 
   return c.json({ offers: data ?? [], total: count ?? 0 });
@@ -77,7 +81,8 @@ offers.post("/offers", authMiddleware, async (c) => {
     .single();
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    logger.error({ err: error.message }, "offer create failed");
+    return c.json({ error: "Nepodařilo se vytvořit nabídku" }, 500);
   }
 
   return c.json({ offer: data }, 201);
@@ -127,7 +132,8 @@ offers.get("/offers/:id", authMiddleware, async (c) => {
     .order("position", { ascending: true });
 
   if (itemsError) {
-    return c.json({ error: itemsError.message }, 500);
+    logger.error({ err: itemsError.message }, "offer items load failed");
+    return c.json({ error: "Nepodařilo se načíst položky nabídky" }, 500);
   }
 
   const offerItems = (items ?? []).map((item) => ({
@@ -186,7 +192,8 @@ offers.put("/offers/:id", authMiddleware, async (c) => {
     .single();
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    logger.error({ err: error.message }, "offer update failed");
+    return c.json({ error: "Nepodařilo se aktualizovat nabídku" }, 500);
   }
 
   return c.json({ offer: data });
@@ -201,6 +208,17 @@ offers.delete("/offers/:id", authMiddleware, async (c) => {
   const offerId = c.req.param("id");
   const supabase = getAdminClient();
 
+  const { data: offer } = await supabase
+    .from("offers")
+    .select("id")
+    .eq("id", offerId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (!offer) {
+    return c.json({ error: "Offer not found" }, 404);
+  }
+
   await supabase.from("offer_items").delete().eq("offer_id", offerId);
 
   const { error } = await supabase
@@ -210,7 +228,7 @@ offers.delete("/offers/:id", authMiddleware, async (c) => {
     .eq("user_id", user.id);
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    return c.json({ error: "Failed to delete offer" }, 500);
   }
 
   return c.json({ success: true });
@@ -237,7 +255,8 @@ offers.put("/offers/:id/messages", authMiddleware, async (c) => {
     .eq("user_id", user.id);
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    logger.error({ err: error.message }, "offer messages save failed");
+    return c.json({ error: "Nepodařilo se uložit zprávy" }, 500);
   }
 
   return c.json({ success: true });
@@ -298,8 +317,8 @@ offers.put("/offers/:id/items", authMiddleware, async (c) => {
       .insert(rows);
 
     if (insertError) {
-      console.error("[offer_items] Insert error:", insertError.message, insertError.details, insertError.hint);
-      return c.json({ error: insertError.message }, 500);
+      logger.error({ err: insertError.message, details: insertError.details, hint: insertError.hint }, "offer_items insert failed");
+      return c.json({ error: "Nepodařilo se uložit položky nabídky" }, 500);
     }
   }
 
@@ -342,7 +361,8 @@ offers.get("/branches", authMiddleware, async (c) => {
     .order("source_branch_code", { ascending: true });
 
   if (error) {
-    return c.json({ error: error.message }, 500);
+    logger.error({ err: error.message }, "branches load failed");
+    return c.json({ error: "Nepodařilo se načíst pobočky" }, 500);
   }
 
   const branches = (data ?? []).map((b) => ({
@@ -354,35 +374,50 @@ offers.get("/branches", authMiddleware, async (c) => {
 });
 
 /**
- * GET /manufacturers
- * Distinct supplier names from products_v2.
- * Cached in-memory for 1 hour since manufacturer list changes rarely.
+ * GET /manufacturers?q=cisco
+ * Search distinct supplier names from stock items.
+ * Returns up to 20 matches for the given query (min 2 chars).
  */
-let mfrCache: { data: string[]; ts: number } | null = null;
-const MFR_CACHE_TTL = 60 * 60 * 1000;
-
 offers.get("/manufacturers", authMiddleware, async (c) => {
-  if (mfrCache && Date.now() - mfrCache.ts < MFR_CACHE_TTL) {
-    return c.json({ manufacturers: mfrCache.data });
-  }
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2) return c.json({ manufacturers: [] });
 
   const supabase = getAdminClient();
   const { data, error } = await supabase
     .from("products_v2")
     .select("supplier_name")
+    .eq("is_stock_item", true)
     .not("supplier_name", "is", null)
     .neq("supplier_name", "")
+    .ilike("supplier_name", `%${q}%`)
     .order("supplier_name")
-    .limit(5000);
+    .limit(500);
 
-  if (error) return c.json({ error: error.message }, 500);
+  if (error) {
+    logger.error({ err: error.message }, "manufacturers search failed");
+    return c.json({ error: "Nepodařilo se vyhledat výrobce" }, 500);
+  }
 
   const unique = [...new Set(
     (data ?? []).map((r: { supplier_name: string }) => r.supplier_name).filter(Boolean),
-  )].sort();
+  )].slice(0, 20);
 
-  mfrCache = { data: unique, ts: Date.now() };
   return c.json({ manufacturers: unique });
+});
+
+/**
+ * GET /categories
+ * Returns the full category tree (code + name + level + parent_code).
+ * Uses the same cached tree as the search planner.
+ */
+offers.get("/categories", authMiddleware, async (c) => {
+  try {
+    const tree = await getCachedCategoryTree();
+    return c.json({ categories: tree });
+  } catch (err) {
+    logger.error({ err: String(err) }, "categories load failed");
+    return c.json({ error: "Nepodařilo se načíst kategorie" }, 500);
+  }
 });
 
 /**

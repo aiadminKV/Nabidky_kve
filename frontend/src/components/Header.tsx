@@ -17,8 +17,9 @@ export function Header({ email, isAdmin, offerTitle }: HeaderProps) {
 
   const navItems = [
     { href: "/offers", label: "Nabídky" },
-    { href: "/search", label: "Vyhledávání" },
-    ...(isAdmin ? [{ href: "/pricelist", label: "Ceník" }] : []),
+    // { href: "/search", label: "Vyhledávání" },
+    // ...(isAdmin ? [{ href: "/pricelist", label: "Ceník" }] : []),
+    ...(isAdmin ? [{ href: "/admin/kit", label: "Sady KB" }] : []),
   ];
 
   const handleClickOutside = useCallback((e: MouseEvent) => {

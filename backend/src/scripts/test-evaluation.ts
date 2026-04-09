@@ -14,7 +14,8 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { searchPipelineForItem, type GroupContext, type SearchPreferences } from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { GroupContext, SearchPreferences } from "../services/types.js";
 import { getAdminClient } from "../services/supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,7 +27,7 @@ const OUTPUT_PATH = path.resolve(__dirname, "./eval-results.json");
 
 const SEARCH_PREFS: SearchPreferences = {
   stockFilter: "stock_items_only",
-  offerType: "realizace",
+  branchFilter: null,
 };
 
 // ── Typy ──────────────────────────────────────────────────────
@@ -173,7 +174,7 @@ async function evaluateItem(
 
   let result;
   try {
-    result = await searchPipelineForItem(
+    result = await searchPipelineV2ForItem(
       { name: row.demand, unit: row.unit, quantity: row.quantity },
       idx,
       undefined,

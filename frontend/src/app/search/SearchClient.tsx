@@ -97,8 +97,14 @@ function AddToOfferModal({ product, onClose, token }: AddToOfferModalProps) {
   }, [newOfferTitle, token, product, router]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl border border-white/20">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl border border-white/20"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="border-b border-kv-gray-100 px-6 py-4">
           <div className="flex items-start justify-between gap-3">

@@ -8,7 +8,8 @@ import "dotenv/config";
 import { fileURLToPath } from "url";
 import * as path from "path";
 import OpenAI from "openai";
-import { searchPipelineForItem, DEFAULT_PREFERENCES, type ParsedItem } from "../services/searchPipeline.js";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import { DEFAULT_PREFERENCES, type ParsedItem } from "../services/types.js";
 import { getAdminClient } from "../services/supabase.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,7 +42,7 @@ async function getPipelineCandidates(item: ParsedItem): Promise<{
   let allSkus: string[] = [];
   let matcherSelectedSku: string | null = null;
 
-  await searchPipelineForItem(
+  await searchPipelineV2ForItem(
     item,
     0,
     (entry) => {

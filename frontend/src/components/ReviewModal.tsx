@@ -2,11 +2,13 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import type { OfferItem, Product, StockContext, StockLevel } from "@/lib/types";
-import { useDebouncedValue } from "@/lib/hooks";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover, getStatusVariant, STATUS_LABELS } from "./ProductInfoPopover";
 import { ProductThumbnail } from "./ProductThumbnail";
 import { StockBadge } from "./StockBadge";
+import { ProductEshopLinkButton } from "./ProductEshopLinkButton";
+import { ManufacturerCombobox } from "./ManufacturerCombobox";
+import { getBranches, type Branch } from "@/lib/api";
 
 const MATCH_METHOD_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
   ean:      { label: "EAN",  icon: "⊟", color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
@@ -54,82 +56,131 @@ function CopySkuButton({ sku }: { sku: string }) {
   );
 }
 
-const MIN_SEARCH_LENGTH = 2;
-const DEBOUNCE_MS = 300;
-
 interface ReviewModalProps {
   item: OfferItem;
   onConfirm: (item: OfferItem, selectedProduct: Product | null) => void;
   onSkip: (item: OfferItem) => void;
   onClose: () => void;
-  onManualSearch: (query: string) => Promise<Product[]>;
-  onSearchWithStockLevel?: (item: OfferItem, level: StockLevel) => void;
+  /** Called when user closes modal after editing text — saves name/qty/unit without changing product or reviewStatus */
+  onSaveEdits?: (item: OfferItem) => void;
+  onSearchWithStockLevel?: (item: OfferItem, level: StockLevel, opts?: ReSearchOpts) => void;
   token?: string;
 }
 
-const STOCK_FALLBACK_OPTIONS: Array<{
-  level: StockLevel;
-  label: string;
-  description: string;
-}> = [
-  { level: "stock_item", label: "Pouze skladovky", description: "Hledej pouze skladové položky bez ohledu na pobočku" },
-  { level: "in_stock",   label: "Skladem kdekoliv", description: "Hledej cokoliv, co je aktuálně skladem" },
-  { level: "any",        label: "Celý katalog",     description: "Hledej bez omezení ve všech produktech" },
-];
+export interface ReSearchOpts {
+  manufacturer?: string;
+  branchCode?: string;
+}
 
-function StockFallbackOptions({
+function ReSearchOptions({
   item,
   stockContext,
+  token,
   onSearch,
 }: {
   item: OfferItem;
-  stockContext: StockContext;
-  onSearch: (item: OfferItem, level: StockLevel) => void;
+  stockContext?: StockContext;
+  token: string;
+  onSearch: (item: OfferItem, level: StockLevel, opts?: ReSearchOpts) => void;
 }) {
-  // The level that was actually used for the last search
-  const activeLevel = stockContext.effectiveLevel ?? stockContext.requestedLevel;
+  const [manufacturer, setManufacturer] = useState(item.appliedManufacturer ?? "");
+  const [showBranches, setShowBranches] = useState(false);
+  const [branches, setBranches] = useState<Branch[]>([]);
+
+  useEffect(() => {
+    if (token) getBranches(token).then(setBranches);
+  }, [token]);
+
+  const activeLevel = stockContext?.effectiveLevel ?? stockContext?.requestedLevel;
+
+  const opts = (): ReSearchOpts => ({
+    manufacturer: manufacturer.trim() || undefined,
+  });
+
+  const SEARCH_OPTIONS: Array<{ level: StockLevel; label: string }> = [
+    { level: "stock_item", label: "Hledáme ve skladovkách" },
+    { level: "in_stock",   label: "Skladem kdekoliv" },
+    { level: "any",        label: "Celý katalog" },
+  ];
 
   return (
-    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-      <p className="mb-2 text-xs font-semibold text-amber-700">
-        Hledat znovu s rozsahem skladu:
+    <div className="mt-2 rounded-lg border border-kv-gray-200 bg-kv-gray-50 px-3 py-2.5 space-y-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-kv-gray-400">
+        Hledat znovu
       </p>
+
+      {/* Manufacturer override */}
+      <ManufacturerCombobox
+        value={manufacturer}
+        onChange={setManufacturer}
+        token={token}
+        placeholder="Filtrovat výrobce…"
+        label="Výrobce (volitelně)"
+      />
+
+      {/* Stock level buttons */}
       <div className="flex flex-wrap gap-1.5">
-        {STOCK_FALLBACK_OPTIONS.map((opt) => {
-          const isActive = opt.level === activeLevel;
-          return (
-            <button
-              key={opt.level}
-              onClick={() => onSearch(item, opt.level)}
-              title={isActive ? `Aktuálně použito: ${opt.description}` : opt.description}
-              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
-                isActive
-                  ? "border-amber-400 bg-amber-100 text-amber-800 ring-1 ring-amber-400/50"
-                  : "border-amber-300 bg-white text-amber-700 hover:bg-amber-100"
-              }`}
-            >
-              {isActive ? (
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
-              ) : (
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-                </svg>
-              )}
-              {opt.label}
-            </button>
-          );
-        })}
+        {SEARCH_OPTIONS.map(({ level, label }) => (
+          <button
+            key={level}
+            onClick={() => { setShowBranches(false); onSearch(item, level, opts()); }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-kv-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-kv-gray-700 transition-colors hover:border-kv-navy/30 hover:bg-kv-navy/5 hover:text-kv-navy"
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+            </svg>
+            {label}
+            {level === activeLevel && (
+              <span className="ml-0.5 text-[10px] font-normal text-kv-gray-400">(naposledy)</span>
+            )}
+          </button>
+        ))}
+
+        {/* Branch button — toggles branch picker */}
+        <button
+          onClick={() => setShowBranches((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+            showBranches
+              ? "border-kv-navy/30 bg-kv-navy/5 text-kv-navy"
+              : "border-kv-gray-200 bg-white text-kv-gray-700 hover:border-kv-navy/30 hover:bg-kv-navy/5 hover:text-kv-navy"
+          }`}
+        >
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+          </svg>
+          Skladem na pobočce
+          {"branch" === activeLevel && (
+            <span className="ml-0.5 text-[10px] font-normal text-kv-gray-400">(naposledy)</span>
+          )}
+        </button>
       </div>
+
+      {/* Branch list */}
+      {showBranches && (
+        <div className="pt-0.5">
+          {branches.length === 0 ? (
+            <p className="text-[11px] text-kv-gray-400">Načítám pobočky…</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {branches.map((b) => (
+                <button
+                  key={b.code}
+                  onClick={() => onSearch(item, "branch", { ...opts(), branchCode: b.code })}
+                  className="rounded-lg border border-kv-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-kv-gray-700 transition-colors hover:border-kv-navy/30 hover:bg-kv-navy/5 hover:text-kv-navy"
+                >
+                  {b.name ?? b.code}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, onSearchWithStockLevel, token = "" }: ReviewModalProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Product[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+export function ReviewModal({ item, onConfirm, onSkip, onClose, onSaveEdits, onSearchWithStockLevel, token = "" }: ReviewModalProps) {
   const [manualSku, setManualSku] = useState("");
   const [showManualInput, setShowManualInput] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(item.product);
@@ -148,63 +199,53 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
     unit: editedUnit.trim() || item.unit,
   }), [item, editedName, editedQuantity, editedUnit]);
 
-  const debouncedQuery = useDebouncedValue(searchQuery, DEBOUNCE_MS);
+  const hasTextChanges =
+    editedName.trim() !== item.originalName ||
+    (editedQuantity.trim() ? Number(editedQuantity) : item.quantity) !== item.quantity ||
+    (editedUnit.trim() || item.unit ?? "") !== (item.unit ?? "");
 
-  useEffect(() => {
-    if (debouncedQuery.trim().length < MIN_SEARCH_LENGTH) {
-      if (searchResults.length > 0 && !searchQuery.trim()) {
-        setSearchResults([]);
-      }
-      return;
-    }
+  const handleClose = useCallback(() => {
+    if (hasTextChanges && onSaveEdits) onSaveEdits(buildEditedItem());
+    onClose();
+  }, [hasTextChanges, onSaveEdits, buildEditedItem, onClose]);
 
-    let cancelled = false;
+  /** Wraps re-search: saves text edits first, then searches with the edited item so the new name is used as query */
+  const handleReSearch = useCallback((searchItem: OfferItem, level: StockLevel, opts?: ReSearchOpts) => {
+    if (!onSearchWithStockLevel) return;
+    const edited = buildEditedItem();
+    if (hasTextChanges && onSaveEdits) onSaveEdits(edited);
+    onSearchWithStockLevel(edited, level, opts);
+  }, [onSearchWithStockLevel, buildEditedItem, hasTextChanges, onSaveEdits]);
 
-    async function search() {
-      setIsSearching(true);
-      try {
-        const results = await onManualSearch(debouncedQuery);
-        if (!cancelled) setSearchResults(results);
-      } finally {
-        if (!cancelled) setIsSearching(false);
-      }
-    }
-
-    search();
-    return () => { cancelled = true; };
-  }, [debouncedQuery, onManualSearch]);
-
-  const handleClearSearch = useCallback(() => {
-    setSearchQuery("");
-    setSearchResults([]);
-  }, []);
-
-  // When searching, show search results. Otherwise, ensure the AI-selected product
-  // is always visible at the top even if it's not in the candidates list.
   const displayCandidates = useMemo(() => {
-    if (searchResults.length > 0) return searchResults;
     const candidates = item.candidates ?? [];
     if (item.product && !candidates.some((c) => c.sku === item.product!.sku)) {
       return [item.product, ...candidates];
     }
     return candidates;
-  }, [searchResults, item.candidates, item.product]);
+  }, [item.candidates, item.product]);
 
   const aiPickedSku = item.product?.sku ?? null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[93vh] flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm p-4"
+      onClick={handleClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[93vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-kv-gray-200 px-6 py-4">
           <div>
             <h3 className="text-sm font-semibold text-kv-navy">Detail položky</h3>
             <p className="mt-0.5 text-xs text-kv-gray-400">
-              Vyberte správný produkt nebo vyhledejte jiný
+              Vyberte správný produkt nebo zadejte SAP kód
             </p>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="flex h-8 w-8 items-center justify-center rounded-xl text-kv-gray-400 transition-colors hover:bg-kv-gray-100 hover:text-kv-gray-600"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -215,30 +256,45 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
 
         {/* Editable original item info */}
         <div className="border-b border-kv-gray-100 bg-kv-gray-50 px-6 py-3">
-          <div className="flex items-center gap-2">
-            <span className="shrink-0 text-xs font-semibold text-kv-navy">Z poptávky</span>
-            <input
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 pt-1.5 text-xs font-semibold text-kv-navy">Z poptávky</span>
+            <textarea
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
               placeholder="Název položky"
-              className="min-w-0 flex-1 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+              rows={3}
+              className="min-w-0 flex-1 resize-none rounded-lg border border-kv-gray-200 bg-white px-2 py-1.5 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
             />
-            <input
-              value={editedQuantity}
-              onChange={(e) => setEditedQuantity(e.target.value)}
-              type="number"
-              min={0}
-              step="any"
-              placeholder="Množ."
-              className="w-16 shrink-0 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark tabular-nums outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
-            />
-            <input
-              value={editedUnit}
-              onChange={(e) => setEditedUnit(e.target.value)}
-              placeholder="MJ"
-              className="w-14 shrink-0 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
-            />
-            <StatusBadge type={item.matchType} confidence={item.confidence} />
+            <div className="flex shrink-0 flex-col gap-1.5">
+              <input
+                value={editedQuantity}
+                onChange={(e) => setEditedQuantity(e.target.value)}
+                type="number"
+                min={0}
+                step="any"
+                placeholder="Množ."
+                className="w-20 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark tabular-nums outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+              />
+              <input
+                value={editedUnit}
+                onChange={(e) => setEditedUnit(e.target.value)}
+                placeholder="MJ"
+                className="w-20 rounded-lg border border-kv-gray-200 bg-white px-2 py-1 text-xs text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:ring-2 focus:ring-kv-navy/10"
+              />
+              <div className="flex justify-end">
+                <StatusBadge
+                  type={item.matchType}
+                  confidence={item.confidence}
+                  confirmed={
+                    item.reviewStatus === "reviewed" ||
+                    item.confirmed === true ||
+                    item.exactLookupFound === true ||
+                    item.matchMethod === "ean" ||
+                    item.matchMethod === "code"
+                  }
+                />
+              </div>
+            </div>
           </div>
           {item.reasoning && (
             <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-kv-gray-50 px-3 py-1.5 text-xs text-kv-gray-600 border border-kv-gray-200">
@@ -256,64 +312,36 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
               <span>{item.priceNote}</span>
             </div>
           )}
-          {onSearchWithStockLevel && item.stockContext && (
-            <StockFallbackOptions item={item} stockContext={item.stockContext} onSearch={onSearchWithStockLevel} />
+          {(item.appliedManufacturer || item.appliedLine) && (
+            <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-kv-navy/5 px-3 py-1.5 text-xs text-kv-navy border border-kv-navy/10">
+              <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              <span>
+                Filtr při vyhledávání:
+                {item.appliedManufacturer && <strong className="ml-1">{item.appliedManufacturer}</strong>}
+                {item.appliedLine && <span className="ml-1 opacity-70">/ {item.appliedLine}</span>}
+              </span>
+            </div>
           )}
-        </div>
-
-        {/* Search bar */}
-        <div className="border-b border-kv-gray-100 px-6 py-3">
-          <div className="relative">
-            <svg
-              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-kv-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-            </svg>
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Začněte psát pro vyhledání produktu…"
-              className="w-full rounded-xl border border-kv-gray-200 bg-kv-gray-50 py-2 pl-10 pr-10 text-sm text-kv-dark outline-none transition-colors placeholder:text-kv-gray-300 focus:border-kv-navy/30 focus:bg-white focus:ring-2 focus:ring-kv-navy/10"
+          {onSearchWithStockLevel && (
+            <ReSearchOptions
+              item={buildEditedItem()}
+              stockContext={item.stockContext}
+              token={token}
+              onSearch={handleReSearch}
             />
-            {searchQuery && (
-              <button
-                onClick={handleClearSearch}
-                className="absolute right-2 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-lg text-kv-gray-400 hover:bg-kv-gray-100 hover:text-kv-gray-600"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-            {isSearching && (
-              <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-kv-gray-300 border-t-kv-red" />
-              </div>
-            )}
-          </div>
-          {searchQuery.length > 0 && searchQuery.length < MIN_SEARCH_LENGTH && (
-            <p className="mt-1 text-xs text-kv-gray-400">
-              Zadejte alespoň {MIN_SEARCH_LENGTH} znaky
-            </p>
           )}
         </div>
 
         {/* Candidates list */}
         <div className="flex-1 overflow-y-auto custom-scrollbar px-6 py-3">
           <p className="mb-2 text-xs font-semibold text-kv-navy">
-            {searchResults.length > 0
-              ? `Výsledky (${searchResults.length})`
-              : displayCandidates.length > 0
-                ? `Kandidáti (${displayCandidates.length})`
-                : "Kandidáti"}
+            {displayCandidates.length > 0 ? `Kandidáti (${displayCandidates.length})` : "Kandidáti"}
           </p>
           <div className="space-y-1.5">
             {displayCandidates.map((product, idx) => {
-              const isAiPick = searchResults.length === 0 && product.sku === aiPickedSku;
+              const isAiPick = product.sku === aiPickedSku;
               return (
               <div
                 key={product.sku + idx}
@@ -343,6 +371,7 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
                     <div className="flex items-center gap-1.5">
                       <p className="text-sm font-medium text-kv-dark truncate">{product.name}</p>
                       <ProductInfoPopover product={product} size="md" />
+                      <ProductEshopLinkButton sku={product.sku} size="md" />
                     </div>
                     <p
                       className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
@@ -413,9 +442,7 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
             })}
             {displayCandidates.length === 0 && (
               <p className="py-6 text-center text-xs text-kv-gray-400">
-                {searchQuery.length >= MIN_SEARCH_LENGTH && !isSearching
-                  ? "Žádné výsledky. Zkuste jiný dotaz."
-                  : "Žádní kandidáti. Začněte psát pro vyhledání."}
+                Žádní kandidáti. Zadejte SAP kód níže.
               </p>
             )}
           </div>
@@ -465,28 +492,20 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onManualSearch, 
           >
             Přeskočit
           </button>
-          <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="rounded-xl border border-kv-gray-200 px-4 py-2 text-sm font-medium text-kv-gray-600 transition-colors hover:bg-kv-gray-50"
-            >
-              Zrušit
-            </button>
-            <button
-              onClick={() => {
-                const edited = buildEditedItem();
-                if (manualSku.trim()) {
-                  onConfirm(edited, { sku: manualSku.trim(), name: manualSku.trim(), manufacturer_code: null, manufacturer: null, category: null, unit: null, ean: null });
-                } else {
-                  onConfirm(edited, selectedProduct);
-                }
-              }}
-              disabled={!selectedProduct && !manualSku.trim() && !wasDeselected}
-              className="rounded-xl bg-kv-red px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Potvrdit výběr
-            </button>
-          </div>
+          <button
+            onClick={() => {
+              const edited = buildEditedItem();
+              if (manualSku.trim()) {
+                onConfirm(edited, { sku: manualSku.trim(), name: manualSku.trim(), manufacturer_code: null, manufacturer: null, category: null, unit: null, ean: null });
+              } else {
+                onConfirm(edited, selectedProduct);
+              }
+            }}
+            disabled={!selectedProduct && !manualSku.trim() && !wasDeselected}
+            className="rounded-xl bg-kv-red px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Potvrdit výběr
+          </button>
         </div>
       </div>
     </div>

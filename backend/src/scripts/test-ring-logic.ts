@@ -1,7 +1,8 @@
 import "dotenv/config";
-import { searchPipelineForItem } from "../services/searchPipeline";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
+import type { SearchPreferences } from "../services/types.js";
 
-const prefs = { offerType: "realizace" as const, stockFilter: "stock_items_only" as const };
+const prefs: SearchPreferences = { stockFilter: "stock_items_only", branchFilter: null };
 
 const tests = [
   { name: "CYKY-J 3x2,5", qty: 50,  unit: "m", label: "50m → KRUH 50M expected" },
@@ -17,9 +18,9 @@ async function main() {
     console.log("─".repeat(60));
     console.log(`TEST: ${t.label}`);
     try {
-      const r = await searchPipelineForItem(
+      const r = await searchPipelineV2ForItem(
         { name: t.name, unit: t.unit, quantity: t.qty },
-        prefs,
+        0, undefined, prefs,
       );
       const pkg = (r.product?.name || "").match(/KRUH \d+M|BUBEN(?: NEVRATNY)?/i)?.[0] || "?";
       const status = r.product ? `SKU: ${r.product.sku}` : "nenalezeno";

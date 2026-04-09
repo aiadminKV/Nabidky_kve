@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import type { OfferItem } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { ProductInfoPopover, isProductStatusProblematic, getStatusVariant, STATUS_LABELS } from "./ProductInfoPopover";
 import { ProductThumbnail } from "./ProductThumbnail";
 import { StockBadge } from "./StockBadge";
+import { ProductEshopLinkButton } from "./ProductEshopLinkButton";
 import {
   DndContext,
   closestCenter,
@@ -41,15 +42,6 @@ function MatchMethodBadge({ method }: { method?: string }) {
 }
 
 
-const MATCH_TYPE_LABELS: Record<string, string> = {
-  match: "Přesná shoda",
-  uncertain: "Nejistá shoda",
-  multiple: "Více shod",
-  alternative: "Alternativa",
-  not_found: "Nenalezeno",
-  processing: "Zpracovávám…",
-};
-
 const COMPONENT_ROLE_LABELS: Record<string, string> = {
   mechanism: "Strojek",
   cover: "Kryt",
@@ -58,60 +50,6 @@ const COMPONENT_ROLE_LABELS: Record<string, string> = {
   socket: "Zásuvka",
   other: "Díl",
 };
-
-function ReasoningPopover({ item }: { item: OfferItem }) {
-  const [open, setOpen] = useState(false);
-  if (!item.reasoning && !item.reformulatedQuery) return null;
-  return (
-    <div className="relative">
-      <button
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-        title="Zobrazit rozhodování AI"
-        className={`flex h-7 w-7 items-center justify-center rounded-lg transition-all ${open ? "bg-kv-navy/10 text-kv-navy" : "text-kv-gray-300 hover:bg-kv-navy/10 hover:text-kv-navy"}`}
-      >
-        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-        </svg>
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-8 z-40 w-80 rounded-xl border border-kv-gray-200 bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-center gap-2">
-              <svg className="h-4 w-4 text-kv-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-              </svg>
-              <span className="text-xs font-semibold text-kv-navy">Rozhodování AI</span>
-            </div>
-            <div className="space-y-2 text-xs">
-              <div className="flex gap-2">
-                <span className="w-24 shrink-0 text-kv-gray-400">Shoda</span>
-                <span className="font-medium text-kv-dark">{MATCH_TYPE_LABELS[item.matchType] ?? item.matchType} ({item.confidence}%)</span>
-              </div>
-              {item.pipelineMs != null && (
-                <div className="flex gap-2">
-                  <span className="w-24 shrink-0 text-kv-gray-400">Čas</span>
-                  <span className="text-kv-gray-600">{(item.pipelineMs / 1000).toFixed(1)} s</span>
-                </div>
-              )}
-              {item.reformulatedQuery && (
-                <div className="flex gap-2">
-                  <span className="w-24 shrink-0 text-kv-gray-400">Dotaz AI</span>
-                  <span className="text-kv-gray-600 break-all">{item.reformulatedQuery}</span>
-                </div>
-              )}
-              {item.reasoning && (
-                <div className="mt-2 rounded-lg bg-kv-gray-50 p-2.5 text-kv-gray-700 leading-relaxed">
-                  {item.reasoning}
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 function CopySkuButton({ sku }: { sku: string }) {
   const [copied, setCopied] = useState(false);
@@ -173,6 +111,16 @@ function unitMismatchLabel(demandUnit: string, productUnit: string): string {
   return `Poptávka: ${demandUnit} → Produkt: ${productUnit}`;
 }
 
+function isItemConfirmed(item: OfferItem): boolean {
+  return (
+    item.reviewStatus === "reviewed" ||
+    item.confirmed === true ||
+    item.exactLookupFound === true ||
+    item.matchMethod === "ean" ||
+    item.matchMethod === "code"
+  );
+}
+
 interface SortableRowProps {
   item: OfferItem;
   isCurrentlySearching: boolean;
@@ -197,6 +145,7 @@ function SortableRow({
   children,
 }: SortableRowProps) {
   const [showInsert, setShowInsert] = useState(false);
+  const hideInsertTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.itemId,
     disabled: isDragDisabled,
@@ -208,22 +157,52 @@ function SortableRow({
     position: "relative" as const,
   };
 
+  const clearHideInsertTimeout = useCallback(() => {
+    if (hideInsertTimeoutRef.current) {
+      clearTimeout(hideInsertTimeoutRef.current);
+      hideInsertTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleHideInsert = useCallback(() => {
+    clearHideInsertTimeout();
+    hideInsertTimeoutRef.current = setTimeout(() => setShowInsert(false), 120);
+  }, [clearHideInsertTimeout]);
+
+  const handleRowMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLTableRowElement>) => {
+      if (!onInsertAt || isDragging) return;
+      clearHideInsertTimeout();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const nearBottomEdge = rect.bottom - e.clientY <= 12;
+      setShowInsert(nearBottomEdge);
+    },
+    [onInsertAt, isDragging, clearHideInsertTimeout],
+  );
+
+  const keepInsertVisible = useCallback(() => {
+    clearHideInsertTimeout();
+    setShowInsert(true);
+  }, [clearHideInsertTimeout]);
+
+  useEffect(() => () => clearHideInsertTimeout(), [clearHideInsertTimeout]);
+
   return (
     <>
       <tr
         ref={setNodeRef}
         style={style}
         onClick={onClick}
-        onMouseEnter={() => onInsertAt && setShowInsert(true)}
-        onMouseLeave={() => setShowInsert(false)}
+        onMouseMove={handleRowMouseMove}
+        onMouseLeave={scheduleHideInsert}
         className={`group/row transition-all duration-500 ${
           isCurrentlySearching
             ? "bg-kv-gray-50 animate-pulse-subtle"
             : justChanged
               ? "bg-green-50/60"
               : isReviewed
-                ? "bg-emerald-50/40 cursor-pointer hover:bg-emerald-50/70 border-l-2 border-l-emerald-400"
-                : "bg-amber-50/50 cursor-pointer hover:bg-amber-100/60 border-l-2 border-l-amber-400"
+                ? "bg-emerald-100/95 cursor-pointer hover:bg-emerald-100 border-l-4 border-l-emerald-500"
+                : "bg-amber-100/95 cursor-pointer hover:bg-amber-100 border-l-4 border-l-amber-500"
         }`}
       >
         {/* Drag handle as first cell */}
@@ -233,7 +212,7 @@ function SortableRow({
               {...attributes}
               {...listeners}
               onClick={(e) => e.stopPropagation()}
-              className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-kv-gray-200 opacity-0 transition-all group-hover/row:opacity-100 hover:text-kv-gray-400 active:cursor-grabbing"
+              className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-kv-gray-300 transition-all hover:text-kv-gray-500 active:cursor-grabbing"
               title="Přetáhnout"
             >
               <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
@@ -245,25 +224,39 @@ function SortableRow({
         {children}
       </tr>
       {/* Insert between rows */}
-      {onInsertAt && (showInsert || isLastRow) && (
-        <tr
-          onMouseEnter={() => setShowInsert(true)}
-          onMouseLeave={() => setShowInsert(false)}
-          className="h-0"
-        >
-          <td colSpan={99} className="p-0">
-            <div className={`flex items-center transition-all duration-150 ${showInsert ? "h-5 opacity-100" : "h-0 opacity-0"}`}>
-              <div className="flex-1 border-t border-dashed border-kv-gray-200" />
-              <button
-                onClick={(e) => { e.stopPropagation(); onInsertAt(item.position); }}
-                className="mx-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-kv-gray-300 bg-white text-kv-gray-400 hover:border-kv-navy hover:text-kv-navy"
-                title="Přidat položku zde"
-              >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-              </button>
-              <div className="flex-1 border-t border-dashed border-kv-gray-200" />
+      {onInsertAt && (
+        <tr className="h-0">
+          <td colSpan={99} className="relative h-0 p-0">
+            <div
+              onMouseEnter={keepInsertVisible}
+              onMouseLeave={scheduleHideInsert}
+              className="absolute inset-x-0 top-0 z-20 h-5 -translate-y-1/2"
+            >
+              <div className="flex h-full items-center">
+                <div
+                  className={`flex-1 border-t border-dashed transition-colors duration-150 ${
+                    showInsert || isLastRow ? "border-kv-gray-300" : "border-transparent"
+                  }`}
+                />
+                <button
+                  onClick={(e) => { e.stopPropagation(); onInsertAt(item.position); }}
+                  className={`mx-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border bg-white text-kv-gray-400 shadow-sm transition-all duration-150 hover:border-kv-navy hover:text-kv-navy ${
+                    showInsert || isLastRow
+                      ? "pointer-events-auto scale-100 opacity-100 border-kv-gray-300"
+                      : "pointer-events-none scale-90 opacity-0 border-transparent"
+                  }`}
+                  title="Přidat položku zde"
+                >
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                  </svg>
+                </button>
+                <div
+                  className={`flex-1 border-t border-dashed transition-colors duration-150 ${
+                    showInsert || isLastRow ? "border-kv-gray-300" : "border-transparent"
+                  }`}
+                />
+              </div>
             </div>
           </td>
         </tr>
@@ -280,13 +273,12 @@ interface ResultsTableProps {
   onExport: () => void;
   onSendSap: () => void;
   onReset: () => void;
-  onProcessNotFound: () => void;
   onProcessAgain?: () => void;
   onAddItem?: () => void;
   onDeleteItem?: (itemId: string) => void;
   onReorder?: (reorderedItems: OfferItem[]) => void;
   onInsertAt?: (afterPosition: number) => void;
-  isSearchingSemantic: boolean;
+  onQuickConfirm?: (itemId: string) => void;
   isProcessing?: boolean;
   token?: string;
 }
@@ -299,13 +291,12 @@ export function ResultsTable({
   onExport,
   onSendSap,
   onReset,
-  onProcessNotFound,
   onProcessAgain,
   onAddItem,
   onDeleteItem,
   onReorder,
   onInsertAt,
-  isSearchingSemantic,
+  onQuickConfirm,
   isProcessing = false,
   token = "",
 }: ResultsTableProps) {
@@ -333,11 +324,11 @@ export function ResultsTable({
   const primaryButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-2xl bg-kv-red px-4.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-kv-red-dark disabled:opacity-40 disabled:cursor-not-allowed";
 
   const topLevelItems = items.filter((i) => !i.parentItemId);
-  const matchedCount = topLevelItems.filter((i) => i.matchType !== "not_found" || i.confirmed).length;
+  const matchedCount = topLevelItems.filter((i) => i.matchType !== "not_found" || isItemConfirmed(i)).length;
   const doneCount = items.filter((i) => !searchingSet.has(i.itemId)).length;
   const isSearching = searchingSet.size > 0;
-  const notFoundCount = topLevelItems.filter((i) => i.matchType === "not_found" && !i.confirmed).length;
-  const unreviewedCount = items.filter((i) => i.reviewStatus !== "reviewed" && !i.parentItemId).length;
+  const notFoundCount = topLevelItems.filter((i) => i.matchType === "not_found" && !isItemConfirmed(i)).length;
+  const unreviewedCount = topLevelItems.filter((i) => !isItemConfirmed(i)).length;
   const unitMismatchCount = items.filter((i) => i.product && hasUnitMismatch(i.unit, i.product.unit)).length;
   const priceNoteCount = items.filter((i) => i.priceNote).length;
   const uncertainCount = items.filter((i) => (i.matchType === "uncertain" || i.matchType === "alternative") && !i.parentItemId).length;
@@ -423,23 +414,6 @@ export function ResultsTable({
                 Zpracovat znovu
               </button>
             )}
-            <button
-              onClick={onProcessNotFound}
-              disabled={notFoundCount === 0 || isSearchingSemantic || isSearching}
-              className={amberButtonClass}
-            >
-              {isSearchingSemantic ? (
-                <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              ) : (
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-                </svg>
-              )}
-              {isSearchingSemantic ? "Vyhledávám…" : "Zpracovat nenalezené"}
-            </button>
             <button
               onClick={() => setShowResetModal(true)}
               className={neutralButtonClass}
@@ -544,21 +518,21 @@ export function ResultsTable({
         )}
       <div className="h-full overflow-y-auto overflow-x-auto custom-scrollbar pb-24">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <table className="w-full">
+        <table className="w-full" style={{ minWidth: 988 }}>
           <thead className="sticky top-0 z-10 bg-kv-gray-50 border-b border-kv-gray-200">
             <tr>
-              <th className="w-6 pl-1 pr-0" />
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 w-10">#</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Poptávka</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 w-20">Množ.</th>
+              <th style={{ width: "2%" }} className="pl-1 pr-0" />
+              <th style={{ width: "3%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">#</th>
+              <th style={{ width: "20%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Poptávka</th>
+              <th style={{ width: "11%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Množ.</th>
               {extraColumnKeys.map((key) => (
-                <th key={key} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 whitespace-nowrap">
+                <th key={key} style={{ width: "8%" }} className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400 whitespace-nowrap">
                   {key}
                 </th>
               ))}
               <th className="px-4 py-2.5 text-left text-xs font-medium text-kv-gray-400">Nalezený produkt</th>
-              <th className="px-4 py-2.5 text-right text-xs font-medium text-kv-gray-400 w-36">Stav</th>
-              <th className="px-4 py-2.5 text-center text-xs font-medium text-kv-gray-400 w-20">Akce</th>
+              <th style={{ width: "9%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-right text-xs font-medium text-kv-gray-400 whitespace-nowrap">Stav</th>
+              <th style={{ width: "7%" }} className="border-l border-kv-gray-100 px-5 py-2.5 text-center text-xs font-medium text-kv-gray-400 whitespace-nowrap">Akce</th>
             </tr>
           </thead>
             <SortableContext items={items.map((i) => i.itemId)} strategy={verticalListSortingStrategy}>
@@ -566,7 +540,7 @@ export function ResultsTable({
             {items.map((item, idx) => {
               const isCurrentlySearching = searchingSet.has(item.itemId);
               const justChanged = changedPositions?.has(item.position) ?? false;
-              const isReviewed = item.reviewStatus === "reviewed";
+              const isReviewed = isItemConfirmed(item);
               const isComponent = !!item.parentItemId;
               const isSetParent = !isComponent && items.some((i) => i.parentItemId === item.itemId);
               return (
@@ -581,10 +555,10 @@ export function ResultsTable({
                   isLastRow={idx === items.length - 1}
                   onClick={() => !isCurrentlySearching && !isSetParent && onItemClick(item)}
                 >
-                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400">
+                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-gray-400 align-top pt-3">
                     {isComponent ? "" : item.position + 1}
                   </td>
-                  <td className={`px-4 py-2.5 text-sm text-kv-dark ${isComponent ? "pl-10" : ""}`}>
+                  <td className={`px-4 py-2.5 text-sm text-kv-dark align-top pt-3 ${isComponent ? "pl-10" : ""}`}>
                     {isComponent && (
                       <span className="mr-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
                         {COMPONENT_ROLE_LABELS[item.componentRole ?? ""] ?? item.componentRole ?? "?"}
@@ -597,166 +571,176 @@ export function ResultsTable({
                     )}
                     {item.originalName}
                   </td>
-                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-dark">
-                    {item.quantity != null ? (
-                      <div className="flex items-center gap-1">
-                        <span>
-                          {item.quantity}
-                          {item.unit && <span className="ml-1 text-kv-gray-400">{item.unit}</span>}
-                        </span>
-                        {!isCurrentlySearching && item.product && hasUnitMismatch(item.unit, item.product.unit) && (
-                          <span
-                            title={unitMismatchLabel(item.unit!, item.product.unit!)}
-                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 cursor-help"
-                          >
-                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-                            </svg>
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-kv-gray-300">—</span>
-                    )}
+                  <td className="px-4 py-2.5 text-sm tabular-nums text-kv-dark align-top">
+                    <div className="flex items-center gap-1 pt-0.5">
+                      {item.quantity != null ? (
+                        <>
+                          <span className="font-medium">{item.quantity}</span>
+                          {item.unit && <span className="text-kv-gray-400">{item.unit}</span>}
+                          {!isCurrentlySearching && item.product && hasUnitMismatch(item.unit, item.product.unit) && (
+                            <span
+                              title={unitMismatchLabel(item.unit!, item.product.unit!)}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 cursor-help"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                              </svg>
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-kv-gray-300">—</span>
+                      )}
+                    </div>
                   </td>
                   {extraColumnKeys.map((key) => (
                     <td key={key} className="px-4 py-2.5 text-sm text-kv-dark max-w-[150px] truncate">
                       {item.extraColumns?.[key] ?? "—"}
                     </td>
                   ))}
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                        {item.product && !isCurrentlySearching && (
+                  <td className="px-4 py-2.5 align-top">
+                    <div className="flex items-start gap-2 min-w-0">
+                        {item.product && !isCurrentlySearching ? (
                           <ProductThumbnail sku={item.product.sku} name={item.product.name} size="sm" />
+                        ) : (
+                          <div className="h-8 w-8 shrink-0" />
                         )}
                         <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-sm text-kv-dark truncate">
-                            {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
-                          </span>
-                          {item.product && !isCurrentlySearching && (
-                            <ProductInfoPopover product={item.product} />
-                          )}
-                        </div>
-                        {/* Description — always rendered to keep consistent row height */}
-                        <p
-                          className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
-                          title={item.product?.description ?? undefined}
-                        >
-                          {item.product?.description ?? ""}
-                        </p>
-                      {item.product && !isCurrentlySearching && (
-                        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
-                          <MatchMethodBadge method={item.matchMethod} />
-                          {(() => {
-                            const total = item.candidates.length + 1;
-                            return (
-                              <span
-                                title={`${total} ${total === 1 ? "varianta" : "varianty/variant"} celkem — klikněte pro výběr`}
-                                className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
-                                  total > 1
-                                    ? "border-orange-200 bg-orange-50 text-orange-600"
-                                    : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400"
-                                }`}
-                              >
-                                <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
-                                </svg>
-                                {total} var.
-                              </span>
-                            );
-                          })()}
-                          {item.product.sku && (
-                            <span className="flex items-center gap-0.5">
-                              <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
-                              <CopySkuButton sku={item.product.sku} />
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-sm text-kv-dark truncate">
+                              {item.product?.name ?? (isCurrentlySearching ? "" : item.matchType === "multiple" && item.candidates.length > 0 ? `${item.candidates.length} kandidát(ů) — klikněte pro výběr` : "—")}
                             </span>
+                            {item.product && !isCurrentlySearching && (
+                              <>
+                                <ProductInfoPopover product={item.product} />
+                                <ProductEshopLinkButton sku={item.product.sku} />
+                              </>
+                            )}
+                          </div>
+                          {/* Description — always rendered, fixed height to keep row stable */}
+                          <p
+                            className="h-4 truncate text-[11px] text-kv-gray-400 whitespace-nowrap overflow-hidden"
+                            title={item.product?.description ?? undefined}
+                          >
+                            {item.product?.description ?? ""}
+                          </p>
+                          {/* Badges row — fixed two-line area keeps row height stable without clipping important badges */}
+                          <div className="mt-0.5 flex h-10 content-start flex-wrap gap-x-1.5 gap-y-1 overflow-hidden pt-0.5">
+                            {!isCurrentlySearching && item.product && (
+                              <>
+                                <MatchMethodBadge method={item.matchMethod} />
+                                {(() => {
+                                  const total = item.candidates.length + 1;
+                                  return (
+                                    <span
+                                      title={`${total} ${total === 1 ? "varianta" : "varianty/variant"} celkem — klikněte pro výběr`}
+                                      className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                        total > 1
+                                          ? "border-orange-200 bg-orange-50 text-orange-600"
+                                          : "border-kv-gray-200 bg-kv-gray-50 text-kv-gray-400"
+                                      }`}
+                                    >
+                                      <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15 12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+                                      </svg>
+                                      {total} var.
+                                    </span>
+                                  );
+                                })()}
+                                {item.product.sku && (
+                                  <span className="flex items-center gap-0.5">
+                                    <span className="text-xs font-mono text-kv-gray-400">{item.product.sku}</span>
+                                    <CopySkuButton sku={item.product.sku} />
+                                  </span>
+                                )}
+                                {item.product.current_price != null && (
+                                  <span className="min-w-[72px] text-xs font-semibold text-kv-dark tabular-nums">
+                                    {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
+                                    {item.product.unit && <span className="ml-0.5 font-normal text-kv-gray-400">/{item.product.unit}</span>}
+                                  </span>
+                                )}
+                                <StockBadge product={item.product} token={token} />
+                                {item.product.status_sales_code && (() => {
+                                  const code = item.product!.status_sales_code!;
+                                  const variant = getStatusVariant(code);
+                                  const variantClass = {
+                                    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+                                    amber: "border-amber-200 bg-amber-50 text-amber-700",
+                                    red:   "border-red-200 bg-red-50 text-red-600",
+                                    gray:  "border-kv-gray-200 bg-kv-gray-100 text-kv-gray-500",
+                                  }[variant];
+                                  const dotClass = {
+                                    green: "bg-emerald-500",
+                                    amber: "bg-amber-400",
+                                    red: "bg-red-500",
+                                    gray: "bg-kv-gray-300",
+                                  }[variant];
+                                  const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
+                                  return (
+                                    <span
+                                      className={`inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
+                                      title={item.product!.status_sales_text ?? code}
+                                    >
+                                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
+                                      {label}
+                                    </span>
+                                  );
+                                })()}
+                              </>
+                            )}
+                            {!isCurrentlySearching && !item.product && item.matchMethod && item.matchMethod !== "not_found" && (
+                              <>
+                                <MatchMethodBadge method={item.matchMethod} />
+                                {item.candidates.length > 0 && (
+                                  <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          {item.priceNote && !isCurrentlySearching && (
+                            <div className="mt-1 flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
+                              <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                              </svg>
+                              <span className="truncate">{item.priceNote}</span>
+                            </div>
                           )}
-                          {item.product.current_price != null && (
-                            <span className="min-w-[72px] text-xs font-semibold text-kv-dark tabular-nums">
-                              {new Intl.NumberFormat("cs-CZ", { style: "currency", currency: "CZK", maximumFractionDigits: 0 }).format(item.product.current_price)}
-                              {item.product.unit && <span className="ml-0.5 font-normal text-kv-gray-400">/{item.product.unit}</span>}
-                            </span>
+                          {!isCurrentlySearching && item.exactLookupAttempted && !item.exactLookupFound && item.matchType === "not_found" && item.candidates.length === 0 && (
+                            <div className="mt-1 flex items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-[11px] text-red-600 border border-red-200">
+                              <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
+                              </svg>
+                              <span>EAN/kód nenalezen v katalogu</span>
+                            </div>
                           )}
-                          <StockBadge product={item.product} token={token} />
-                          {item.product.status_sales_code && (() => {
-                            const code = item.product!.status_sales_code!;
-                            const variant = getStatusVariant(code);
-                            const variantClass = {
-                              green: "border-emerald-200 bg-emerald-50 text-emerald-700",
-                              amber: "border-amber-200 bg-amber-50 text-amber-700",
-                              red:   "border-red-200 bg-red-50 text-red-600",
-                              gray:  "border-kv-gray-200 bg-kv-gray-100 text-kv-gray-500",
-                            }[variant];
-                            const dotClass = {
-                              green: "bg-emerald-500",
-                              amber: "bg-amber-400",
-                              red: "bg-red-500",
-                              gray: "bg-kv-gray-300",
-                            }[variant];
-                            const label = STATUS_LABELS[code] ?? item.product!.status_sales_text ?? code;
-                            return (
-                              <span
-                                className={`inline-flex min-w-[88px] justify-center items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${variantClass}`}
-                                title={item.product!.status_sales_text ?? code}
-                              >
-                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
-                                {label}
-                              </span>
-                            );
-                          })()}
-                        </div>
-                      )}
-                      {!item.product && !isCurrentlySearching && item.matchMethod && item.matchMethod !== "not_found" && (
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <MatchMethodBadge method={item.matchMethod} />
-                          {item.candidates.length > 0 && (
-                            <span className="text-xs text-kv-gray-400">{item.candidates.length} kandidát(ů)</span>
-                          )}
-                        </div>
-                      )}
-                      {item.priceNote && !isCurrentlySearching && (
-                        <div className="mt-1 flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
-                          <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-                          </svg>
-                          <span className="truncate">{item.priceNote}</span>
-                        </div>
-                      )}
-                      {!isCurrentlySearching && item.exactLookupAttempted && !item.exactLookupFound && item.matchType === "not_found" && (
-                        <div className="mt-1 flex items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-[11px] text-red-600 border border-red-200">
-                          <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
-                          </svg>
-                          <span>EAN/kód nenalezen v katalogu</span>
-                        </div>
-                      )}
                         </div>{/* end min-w-0 flex-1 */}
                     </div>{/* end flex items-center gap-2 */}
                   </td>
-                  <td className="px-4 py-2.5 text-right">
+                  <td className="border-l border-kv-gray-100 px-5 py-2.5 text-right align-top pt-3">
                     <StatusBadge
                       type={isCurrentlySearching ? "processing" : item.matchType}
                       confidence={isCurrentlySearching ? undefined : item.confidence}
+                      confirmed={isReviewed}
                     />
                   </td>
-                  <td className="px-4 py-2.5 text-center">
+                  <td className="border-l border-kv-gray-100 px-5 py-2.5 text-center align-top pt-2">
                     <div className="flex items-center justify-center gap-1">
-                      {!isCurrentlySearching && (
-                        <ReasoningPopover item={item} />
-                      )}
-                      {!isCurrentlySearching && (
+                      {!isCurrentlySearching && !isSetParent && onQuickConfirm && item.product && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onItemClick(item);
+                            if (!isReviewed) onQuickConfirm(item.itemId);
                           }}
-                          title="Vyhledat znovu / otevřít"
-                          className="flex h-7 w-7 items-center justify-center rounded-lg text-kv-gray-300 transition-all hover:bg-kv-navy/10 hover:text-kv-navy"
+                          title={isReviewed ? "Potvrzeno" : "Potvrdit položku"}
+                          className={`flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+                            isReviewed
+                              ? "text-emerald-500 cursor-default"
+                              : "text-kv-gray-300 hover:bg-emerald-50 hover:text-emerald-500"
+                          }`}
                         >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182M2.985 19.644l3.181-3.183" />
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                           </svg>
                         </button>
                       )}
@@ -787,8 +771,14 @@ export function ResultsTable({
       </div>
 
       {showReprocessModal && onProcessAgain && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setShowReprocessModal(false)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
               <svg className="h-6 w-6 text-kv-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182M2.985 19.644l3.181-3.183" />
@@ -820,8 +810,14 @@ export function ResultsTable({
       )}
 
       {showResetModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setShowResetModal(false)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
               <svg className="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />

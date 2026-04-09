@@ -1,3 +1,11 @@
+/**
+ * searchPipeline.ts
+ *
+ * LEGACY pipeline — zachováno pro eval/debug skripty.
+ * Produkční pipeline je searchPipelineV2.ts.
+ * Sdílené typy jsou v types.ts.
+ */
+
 import OpenAI from "openai";
 import { env } from "../config/env.js";
 import { generateQueryEmbedding } from "./embedding.js";
@@ -14,60 +22,35 @@ import {
   type StockFilterOptions,
 } from "./search.js";
 
+// Re-export shared types so legacy scripts needn't change their imports
+export type {
+  SearchPreferences,
+  ParsedItem,
+  PipelineResult,
+  GroupContext,
+  PipelineDebugFn,
+  SearchPlanGroup,
+  SearchPlan,
+} from "./types.js";
+export { DEFAULT_PREFERENCES } from "./types.js";
+
 const PIPELINE_MODEL = "gpt-5.4-mini";
 const MAX_RESULTS_FULLTEXT = 30;
 const MAX_RESULTS_SEMANTIC = 50;
 const SIM_THRESHOLD = 0.35;
 const MAX_REFINEMENTS = 2;
 
-// ── Types ──────────────────────────────────────────────────
+// ── Local-only types (used only inside this file) ──────────
 
-export interface SearchPreferences {
-  stockFilter: "any" | "in_stock" | "stock_items_only";
-  branchFilter: string | null;
-}
-
-export const DEFAULT_PREFERENCES: SearchPreferences = {
-  stockFilter: "any",
-  branchFilter: null,
-};
-
-export interface ParsedItem {
-  name: string;
-  unit: string | null;
-  quantity: number | null;
-  instruction?: string | null;
-  /** Výrobcova katalogová čísla (source_idnlf_raw) — přidají se jako prioritní kandidáti před MATCHER */
-  extraLookupCodes?: string[];
-}
-
-export interface PipelineResult {
-  position: number;
-  originalName: string;
-  unit: string | null;
-  quantity: number | null;
-  matchType: "match" | "uncertain" | "multiple" | "alternative" | "not_found";
-  confidence: number;
-  product: Partial<ProductResult> | null;
-  candidates: Array<Partial<ProductResult>>;
-  reasoning: string;
-  priceNote: string | null;
-  reformulatedQuery: string;
-  pipelineMs: number;
-  exactLookupAttempted: boolean;
-  exactLookupFound: boolean;
-}
-
-export interface GroupContext {
-  preferredManufacturer: string | null;
-  preferredLine: string | null;
-}
-
-export type PipelineDebugFn = (entry: {
-  position: number;
-  step: string;
-  data: unknown;
-}) => void;
+import type {
+  SearchPreferences,
+  ParsedItem,
+  PipelineResult,
+  GroupContext,
+  PipelineDebugFn,
+  SearchPlanGroup,
+  SearchPlan,
+} from "./types.js";
 
 interface MergedCandidate extends ProductResult {
   cosine_similarity: number;
@@ -101,69 +84,22 @@ interface SelectorResult {
   priceNote: string | null;
 }
 
-// ── Planning Agent ─────────────────────────────────────────
-
-export interface SearchPlanGroup {
-  groupName: string;
-  category: string | null;
-  suggestedManufacturer: string | null;
-  suggestedLine: string | null;
-  notes: string | null;
-  itemIndices: number[];
-}
-
-export interface SearchPlan {
-  groups: SearchPlanGroup[];
-  enrichedItems: Array<ParsedItem & { groupIndex: number; isSet?: boolean; setHint?: string | null }>;
-}
-
 const PLANNING_PROMPT = `Jsi plánovací agent pro B2B elektroinstalační katalog KV Elektro (~471K položek).
 
 ## Tvůj úkol
-Dostaneš seznam rozparsovaných položek z poptávky. Analyzuj VŠECHNY najednou a:
+Dostaneš seznam položek z poptávky a seznam reálných kategorií z databáze.
+Tvůj jediný úkol: **seskup položky do logických skupin podle kategorie**.
 
-1. **Seskup** položky do logických skupin podle typu produktu / kategorie (jističe, kabely, svítidla, zásuvky, rozvaděčové komponenty atd.)
-2. **Navrhni** pro každou skupinu preferovaného výrobce a produktovou řadu, pokud to lze z kontextu odvodit
-3. **Obohatí** každou položku instrukcí pro vyhledávací pipeline
-4. **Identifikuj sady** — položky, které se v B2B katalogu prodávají jako KOMPONENTY (zvlášť), ne jako celek
-
-## Detekce sad (isSet)
-Domovní elektroinstalační prvky (vypínače, zásuvky, datové zásuvky, stmívače, termoregulátory) designových řad se v B2B katalogu prodávají ROZLOŽENĚ:
-- **přístroj/strojek** (mechanism) — funkční elektrotechnická část
-- **kryt/čelní deska** (cover) — dekorativní krytka
-- **rámeček** (frame) — montážní a estetický rámeček
-
-isSet = true pokud:
-- zákazník poptává KOMPLETNÍ produkt (vypínač, zásuvka, stmívač...) konkrétní designové řady (Sedna, Tango, Mosaic, Gira...)
-- NEBO pokud z kontextu plyne, že chce hotový výrobek a ne jen komponent
-
-isSet = false pokud:
-- zákazník poptává KONKRÉTNÍ KOMPONENT (jen rámeček, jen strojek, jen kryt)
-- jedná se o průmyslovou zásuvku (CEE/IP44/IP65 — celek)
-- jedná se o produkt který se neprodává rozloženě (jistič, kabel, svítidlo, rozvodnice...)
-
-setHint: pro sady vyplň anglický/český search hint pro web search agenta:
-- Příklad: "Schneider Sedna switch type 6 white mechanism cover frame catalog numbers order codes"
-- Příklad: "ABB Tango socket 230V white components frame mechanism cover catalog numbers"
-- Hint MUSÍ obsahovat "catalog numbers" nebo "order codes" — chceme konkrétní katalogová čísla
+## Kategorie
+Pole "categories" obsahuje kategorie 1. úrovně z DB. Každá má: category_code (číselný kód), category_name (název).
+- Každé skupině přiřaď PRÁVĚ JEDEN category_code z tohoto seznamu — přesně tak, jak je uvedeno
+- NIKDY nevymýšlej vlastní kódy ani názvy kategorií
+- Pokud si nejsi jistý, vyber nejbližší kategorii nebo null
 
 ## Jak seskupovat
-- Položky stejného typu do jedné skupiny (všechny jističe, všechny kabely, atd.)
-- Pokud poptávka obsahuje výrobce (např. "ABB jistič"), nastav ho jako suggestedManufacturer pro celou skupinu
-- Pokud je zmíněna řada/model (např. "Tango", "S200"), nastav suggestedLine
-- Pokud nelze odvodit výrobce/řadu, nech null
-
-## Jak obohacovat instrukce
-Pro každou položku vytvoř pole "instruction" jako text pro vyhledávací AI:
-- Pokud je znám výrobce: "Preferuj výrobce: ABB"
-- Pokud je známa řada: "Preferuj výrobce: ABB, řada: S200"
-- Pokud je stejná barva pro skupinu: "Preferuj výrobce: Schneider, řada: Unica, barva: bílá"
-- Pokud není co dodat, instrukce = null
-
-## Kontext nabídky
-Pokud dostaneš "offerContext", zohledni ho:
-- REALIZACE = standardní dodavatelé, spolehlivé řady
-- VÝBĚRKO = nejnižší cena, i od méně známých dodavatelů
+- Položky stejného typu patří do jedné skupiny (všechny jističe, všechny kabely, atd.)
+- groupName = lidsky čitelný název skupiny (typicky odpovídá category_name z DB)
+- Skupin může být 1 (vše stejná kategorie) i N
 
 ## Formát odpovědi
 Vrať VÝHRADNĚ JSON:
@@ -171,25 +107,13 @@ Vrať VÝHRADNĚ JSON:
   "groups": [
     {
       "groupName": "Jističe",
-      "category": "jistic",
-      "suggestedManufacturer": "ABB",
-      "suggestedLine": "S200",
-      "notes": "Zákazník specifikoval ABB",
+      "categoryCode": "40708",
       "itemIndices": [0, 1, 4]
-    }
-  ],
-  "enrichedItems": [
-    {
-      "index": 0,
-      "isSet": false,
-      "setHint": null,
-      "instruction": "Preferuj výrobce: ABB, řada: S200"
     },
     {
-      "index": 2,
-      "isSet": true,
-      "setHint": "Schneider Sedna switch type 6 white components catalog numbers order codes",
-      "instruction": null
+      "groupName": "Kabely a vodiče",
+      "categoryCode": "40701",
+      "itemIndices": [2, 3]
     }
   ]
 }
@@ -197,15 +121,25 @@ Vrať VÝHRADNĚ JSON:
 ### Pravidla
 - itemIndices = 0-based index v původním poli items
 - Každá položka MUSÍ být v právě jedné skupině
-- enrichedItems musí obsahovat záznam pro KAŽDOU položku (i s instruction: null)
-- Skupin může být 1 (všechno stejná kategorie) i N
-- Neměň name, quantity, unit — jen přidáváš instruction, isSet, setHint a seskupuješ`;
+- categoryCode MUSÍ být z dodaného seznamu, nebo null pokud žádná kategorie neodpovídá`;
 
 export async function createSearchPlan(
   items: ParsedItem[],
-  preferences?: SearchPreferences,
+  _preferences?: SearchPreferences,
 ): Promise<SearchPlan> {
+  // Fetch level-1 category tree so the AI uses real codes instead of inventing its own
+  let categories: Array<{ category_code: string; category_name: string }> = [];
+  try {
+    const tree = await getCachedCategoryTree();
+    categories = tree
+      .filter((c) => c.level === 1)
+      .map((c) => ({ category_code: c.category_code, category_name: c.category_name }));
+  } catch {
+    // non-fatal — planner will work without categories, just with null categoryCode
+  }
+
   const payload: Record<string, unknown> = {
+    categories,
     items: items.map((item, i) => ({
       index: i,
       name: item.name,
@@ -213,7 +147,6 @@ export async function createSearchPlan(
       quantity: item.quantity,
     })),
   };
-
 
   const content = await chatComplete({
     system: PLANNING_PROMPT,
@@ -226,26 +159,27 @@ export async function createSearchPlan(
 
   try {
     const parsed = JSON.parse(content) as {
-      groups: SearchPlanGroup[];
-      enrichedItems: Array<{ index: number; instruction: string | null; isSet?: boolean; setHint?: string | null }>;
+      groups: Array<{ groupName: string; categoryCode?: string | null; itemIndices: number[] }>;
     };
 
-    const enrichedItems: Array<ParsedItem & { groupIndex: number; isSet?: boolean; setHint?: string | null }> = items.map((item, i) => {
-      const enrichment = parsed.enrichedItems.find((e) => e.index === i);
-      const groupIdx = parsed.groups.findIndex((g) => g.itemIndices.includes(i));
+    const groups: SearchPlanGroup[] = parsed.groups.map((g) => ({
+      groupName: g.groupName,
+      category: g.categoryCode ?? null,
+      suggestedManufacturer: null,
+      suggestedLine: null,
+      notes: null,
+      itemIndices: g.itemIndices,
+    }));
+
+    const enrichedItems = items.map((item, i) => {
+      const groupIdx = groups.findIndex((g) => g.itemIndices.includes(i));
       return {
         ...item,
-        instruction: enrichment?.instruction ?? item.instruction ?? null,
         groupIndex: Math.max(0, groupIdx),
-        isSet: enrichment?.isSet ?? false,
-        setHint: enrichment?.setHint ?? null,
       };
     });
 
-    return {
-      groups: parsed.groups,
-      enrichedItems,
-    };
+    return { groups, enrichedItems };
   } catch {
     return buildFallbackPlan(items);
   }
@@ -261,7 +195,7 @@ function buildFallbackPlan(items: ParsedItem[]): SearchPlan {
       notes: null,
       itemIndices: items.map((_, i) => i),
     }],
-    enrichedItems: items.map((item) => ({
+    enrichedItems: items.map((item, _i) => ({
       ...item,
       groupIndex: 0,
     })),
@@ -776,7 +710,7 @@ async function selectProduct(
   originalName: string,
   matcherResult: MatcherResult,
   candidates: MergedCandidate[],
-  preferences?: SearchPreferences,
+  _preferences?: SearchPreferences,
   groupContext?: GroupContext,
   demandUnit?: string | null,
   demandQuantity?: number | null,
@@ -812,10 +746,10 @@ async function selectProduct(
   const payload: Record<string, unknown> = {
     demand: { name: originalName, unit: demandUnit, quantity: demandQuantity },
     shortlist: enrichedShortlist,
-    offerType: preferences?.offerType ?? "realizace",
+    offerType: "realizace",
   };
 
-  if (preferences?.offerType === "vyberko") {
+  if (false) {
     const shortlistSkus = new Set(matcherResult.shortlist.map((s) => s.sku));
     const additional = candidates
       .filter((c) => !shortlistSkus.has(c.sku) && c.current_price != null)
@@ -1206,108 +1140,258 @@ export interface SetPipelineResult {
   totalPipelineMs: number;
 }
 
-const DECOMP_PROMPT = `Jsi expert na domovní elektroinstalační materiál.
+/**
+ * Step 1 prompt: research via web search — plain text output.
+ * Goal: discover ALL complete assembly configurations for the given brand/series.
+ */
+const RESEARCH_PROMPT = `Jsi expert na domovní elektroinstalační materiál pro B2B trh v ČR.
 
-## Úkol
-Rozlož produkt na komponenty prodávané ZVLÁŠŤ v B2B katalozích výrobce.
-Použij web search pro nalezení PŘESNÝCH katalogových čísel výrobce (ne SAP/interní čísla).
+## Tvůj úkol
+Zákazník potřebuje sestavit kompletní instalační sadu. Prohledej web a zjisti VŠECHNY možné způsoby, jak tuto sadu sestavit — různé generace produktů, různé montážní systémy.
 
-## Příklady katalogových čísel
-- Schneider Sedna: SDN0100121, SDN5800121, SDN3100121
-- ABB Tango: 3558A-A651 B, 3901A-B10 B
-- Legrand Mosaic: 067601, 067801, 080251
+Hledej:
+1. Jaké fyzické komponenty jsou potřeba (strojek, kryt/klapka, rámeček, nosič, keystone, senzor…)
+2. Zda existuje víc způsobů sestavení (různé generace, různé typy nosičů…)
+3. Přesná objednací čísla výrobce pro každou variantu
 
-Tato čísla se vyhledávají v databázi B2B distributorů. Vrať je do pole "manufacturerCode".
+## Kde hledat
+- Oficiální web výrobce (se.com, abb.com, legrand.cz, hager.cz, jung.de)
+- B2B katalogy a e-shopy (kvelektro.cz, elfetex.cz, rexel.cz)
+- Montážní návody nebo produktové listy — ty přesně říkají, co je součástí sady
 
-## Pravidla
-- manufacturerCode = katalogové/objednací číslo výrobce
-- Pokud si NEJSI JISTÝ zdrojem → nastav manufacturerCode: null. NEVYMÝŠLEJ čísla.
-- Typicky 2-3 komponenty (strojek + kryt/rámeček, nebo strojek + kryt + rámeček)
-- U některých výrobců je kryt součástí strojku → pak jen 2 komponenty
+## Co chci vědět
+Pro každou variantu montáže uveď:
+- Název varianty (např. "New Unica systém", "Classic Unica MGU systém")
+- Kompletní seznam komponent s kódy
+- Každá komponenta: název, funkce, objednací kód výrobce
 
-## Formát odpovědi — VÝHRADNĚ JSON
+Piš stručně a fakticky. Žádné obecné informace — jen konkrétní komponenty, varianty a kódy.`;
+
+/**
+ * Step 2 prompt: parse research into structured VARIANTS — no tools.
+ * Each variant is a complete, self-sufficient set of components.
+ */
+const PARSE_PROMPT = `Jsi B2B elektro asistent. Ze zprávy o výzkumu vytvoř strukturované VARIANTY kompletních sad.
+
+## Co je varianta
+Varianta = jeden kompletní způsob sestavení sady, který funguje samostatně.
+Příklad: "New Unica systém" (NU kódy) vs "Classic Unica systém" (MGU kódy) jsou dvě různé varianty.
+
+## Role komponent
+- "mechanism" = funkční strojek (vypínač, zásuvka, RJ45 modul…)
+- "cover"     = krycí deska / klapka strojku
+- "frame"     = dekorativní rámeček
+- "other"     = nosič, montážní rámeček, keystone, senzor, adaptér…
+
+## POVINNÁ pravidla
+1. Každá varianta musí být KOMPLETNÍ — obsahovat všechny potřebné komponenty ke kompletní instalaci
+2. Pokud výzkum zmiňuje nosič/montážní rámeček → VŽDY ho zahrň jako "other" ve VŠECH variantách
+3. manufacturerCode: zkopíruj přesně z výzkumu, nebo null
+4. NEVYMÝŠLEJ kódy — raději null než špatný kód
+5. Pokud výzkum obsahuje jen jednu variantu → vrať pole s jedním prvkem
+6. Preferuj varianty seřazené od nejnovější po nejstarší generaci
+
+Vrať VÝHRADNĚ JSON bez dalšího textu:
 {
-  "components": [
+  "variants": [
     {
-      "name": "strojek spínače č.6 Schneider Sedna bílý",
-      "role": "mechanism",
-      "quantity": 1,
-      "manufacturerCode": "SDN0500121",
-      "ean": null
+      "name": "stručný název varianty (např. 'New Unica systém')",
+      "components": [
+        { "name": "název komponenty včetně výrobce a barvy", "role": "mechanism"|"cover"|"frame"|"other", "quantity": 1, "manufacturerCode": "kód nebo null", "ean": null }
+      ]
     }
   ]
 }`;
 
+/** A single web search query made during decomposition */
+export interface DecompWebSearch {
+  query: string;
+  /** Top URLs returned (if available in response) */
+  urls: string[];
+}
+
+export interface SetVariant {
+  name: string;
+  components: SetComponent[];
+}
+
+export interface DecompResult {
+  /** Ordered list of complete variants — try each until one fully resolves */
+  variants: SetVariant[];
+  /** Flat component list from the best/first variant (legacy compat) */
+  components: SetComponent[];
+  ms: number;
+  rawText: string;
+  webSearches: DecompWebSearch[];
+}
+
 /**
- * Decompose a set product into components using web search.
- * Uses OpenAI Responses API with web_search_preview tool.
+ * Decompose a set product into components.
+ *
+ * Strategy:
+ *   1. Check the admin-managed knowledge base (KB) — fast, deterministic, structured.
+ *      If KB has a matching series + function type → return those components directly.
+ *   2. If KB is empty or not specific enough → fall back to the two-step web search approach:
+ *        Step 2a — web_search_preview: research brand/series in plain text
+ *        Step 2b — parse: convert research text into structured JSON
  */
 export async function decomposeSet(
   itemName: string,
   setHint: string,
-): Promise<{ components: SetComponent[]; ms: number }> {
+): Promise<DecompResult> {
   const t0 = Date.now();
 
+  // ── Step 0: Knowledge base lookup ────────────────────────────────────────
+  try {
+    const { lookupInKB } = await import("./kitKnowledgeBase.js");
+    const kbResult = await lookupInKB(itemName, setHint);
+    if (kbResult && kbResult.components.length > 0) {
+      const ms = Date.now() - t0;
+      const singleVariant: SetVariant = {
+        name: `${kbResult.seriesName} — ${kbResult.functionTypeName}`,
+        components: kbResult.components,
+      };
+      return {
+        variants: [singleVariant],
+        components: kbResult.components,
+        ms,
+        rawText: `[KB hit] ${kbResult.seriesName} / ${kbResult.functionTypeName}`,
+        webSearches: [],
+      };
+    }
+  } catch {
+    // KB unavailable — proceed to web search
+  }
+
   const client = openai();
-  const response = await (client as unknown as {
-    responses: {
-      create: (p: unknown) => Promise<{
-        output: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
-      }>;
-    };
-  }).responses.create({
+
+  type Annotation = { type: string; url?: string; title?: string };
+  type ContentBlock = { type: string; text?: string; annotations?: Annotation[] };
+  type ResponseOutput = {
+    type: string;
+    action?: { queries?: string[] };
+    content?: ContentBlock[];
+  };
+
+  type ResponsesClient = {
+    responses: { create: (p: unknown) => Promise<{ output: ResponseOutput[] }> };
+  };
+  const rc = client as unknown as ResponsesClient;
+
+  // ── Step 1: Research via web search ──────────────────────────────────────
+  const researchResp = await rc.responses.create({
     model: PIPELINE_MODEL,
-    reasoning: { effort: "low" },
     tools: [{ type: "web_search_preview" }],
     input: [
-      { role: "system", content: DECOMP_PROMPT },
-      { role: "user", content: `Produkt: "${itemName}"\nWeb search hint: "${setHint}"\n\nNajdi komponenty a jejich katalogová čísla výrobce.` },
+      { role: "system", content: RESEARCH_PROMPT },
+      {
+        role: "user",
+        content:
+          `Výrobce a řada: "${setHint}"\n` +
+          `Produkt zákazníka: "${itemName}"\n\n` +
+          `Prohledej web a zjisti přesné komponenty a objednací kódy pro tuto řadu. ` +
+          `Zaměř se na aktuální katalog výrobce — kódy se mohly změnit.`,
+      },
     ],
   });
 
-  const ms = Date.now() - t0;
+  const webSearches: DecompWebSearch[] = [];
+  let researchText = "";
 
-  let text = "";
-  for (const block of response.output) {
-    if (block.type === "message" && block.content) {
+  for (const block of researchResp.output) {
+    if (block.type === "web_search_call" && block.action?.queries?.length) {
+      for (const q of block.action.queries) {
+        webSearches.push({ query: q, urls: [] });
+      }
+    } else if (block.type === "message" && block.content) {
       for (const c of block.content) {
-        if (c.type === "output_text" && c.text) text += c.text;
+        if (c.type === "output_text" && c.text) researchText += c.text;
+        if (c.annotations) {
+          const last = webSearches[webSearches.length - 1];
+          if (last) {
+            for (const ann of c.annotations) {
+              if (ann.type === "url_citation" && ann.url) last.urls.push(ann.url);
+            }
+          }
+        }
       }
     }
   }
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return { components: [], ms };
+  // ── Step 2: Parse research into structured JSON (no tools) ───────────────
+  const parseResp = await rc.responses.create({
+    model: PIPELINE_MODEL,
+    input: [
+      { role: "system", content: PARSE_PROMPT },
+      {
+        role: "user",
+        content:
+          `Výrobce a řada: "${setHint}"\n` +
+          `Produkt zákazníka: "${itemName}"\n\n` +
+          `Výsledky výzkumu:\n${researchText || "(žádná data z webu — použij obecné znalosti)"}`,
+      },
+    ],
+  });
+
+  const ms = Date.now() - t0;
+  let rawText = researchText;
+
+  for (const block of parseResp.output) {
+    if (block.type === "message" && block.content) {
+      for (const c of block.content) {
+        if (c.type === "output_text" && c.text) rawText = c.text;
+      }
+    }
+  }
+
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return { variants: [], components: [], ms, rawText, webSearches };
+
+  const toComponent = (c: {
+    name: string; role?: string; quantity?: number;
+    manufacturerCode?: string | null; ean?: string | null;
+  }): SetComponent => ({
+    name: c.name,
+    role: (c.role ?? "other") as SetComponent["role"],
+    quantity: c.quantity ?? 1,
+    manufacturerCode: c.manufacturerCode ?? null,
+    ean: c.ean ?? null,
+  });
 
   try {
     const parsed = JSON.parse(jsonMatch[0]) as {
-      components: Array<{
-        name: string;
-        role: string;
-        quantity: number;
-        manufacturerCode?: string | null;
-        ean?: string | null;
-      }>;
+      variants?: Array<{ name?: string; components: typeof parsed.variants extends Array<infer V> ? (V extends { components: infer C } ? C : never) : never }>;
+      components?: Array<{ name: string; role?: string; quantity?: number; manufacturerCode?: string | null; ean?: string | null }>;
     };
+
+    let variants: SetVariant[] = [];
+
+    if (parsed.variants && parsed.variants.length > 0) {
+      variants = parsed.variants.map((v) => ({
+        name: v.name ?? "Varianta",
+        components: (v.components as Parameters<typeof toComponent>[0][]).map(toComponent),
+      }));
+    } else if (parsed.components && parsed.components.length > 0) {
+      // Fallback: old flat format — wrap as single variant
+      variants = [{ name: "Výchozí", components: parsed.components.map(toComponent) }];
+    }
+
     return {
-      components: (parsed.components ?? []).map((c) => ({
-        name: c.name,
-        role: (c.role ?? "other") as SetComponent["role"],
-        quantity: c.quantity ?? 1,
-        manufacturerCode: c.manufacturerCode ?? null,
-        ean: c.ean ?? null,
-      })),
+      variants,
+      components: variants[0]?.components ?? [],
       ms,
+      rawText,
+      webSearches,
     };
   } catch {
-    return { components: [], ms };
+    return { variants: [], components: [], ms, rawText, webSearches };
   }
 }
 
 /**
  * Full set pipeline:
  *   1. Decompose set into components (web search → manufacturer codes)
- *   2. For each component, run searchPipelineForItem (with extraLookupCodes from decomp)
+ *   2. For each component, run searchItemFn (defaults to V1, pass V2 from agent.ts)
  *   3. Return parent + component results
  */
 export async function searchPipelineForSet(
@@ -1317,25 +1401,36 @@ export async function searchPipelineForSet(
   onDebug?: PipelineDebugFn,
   preferences?: SearchPreferences,
   groupContext?: GroupContext,
+  searchItemFn?: (
+    item: ParsedItem,
+    position: number,
+    onDebug: PipelineDebugFn | undefined,
+    preferences: SearchPreferences | undefined,
+    groupContext: GroupContext | undefined,
+  ) => Promise<PipelineResult>,
 ): Promise<SetPipelineResult> {
   const t0 = Date.now();
 
   onDebug?.({ position, step: "set_decompose_start", data: { name: item.name, setHint: item.setHint } });
 
-  const { components, ms: decompMs } = await decomposeSet(item.name, item.setHint);
+  const { variants, ms: decompMs, webSearches } = await decomposeSet(item.name, item.setHint);
 
   onDebug?.({
     position,
     step: "set_decompose_done",
     data: {
-      componentCount: components.length,
+      variantCount: variants.length,
       decompMs,
-      components: components.map((c) => ({ name: c.name, role: c.role, code: c.manufacturerCode })),
+      webSearches,
+      variants: variants.map((v) => ({
+        name: v.name,
+        components: v.components.map((c) => ({ name: c.name, role: c.role, code: c.manufacturerCode })),
+      })),
     },
   });
 
-  if (components.length === 0) {
-    onDebug?.({ position, step: "set_fallback_single", data: { reason: "no components from decomposition" } });
+  if (variants.length === 0) {
+    onDebug?.({ position, step: "set_fallback_single", data: { reason: "no variants from decomposition" } });
     const singleResult = await searchPipelineForItem(item, position, onDebug, preferences, groupContext);
     return {
       parentPosition: position,
@@ -1357,25 +1452,58 @@ export async function searchPipelineForSet(
     };
   }
 
-  const componentResults = await Promise.all(
+  const runSearch = searchItemFn ?? searchPipelineForItem;
+
+  const buildSearchItems = (components: SetComponent[]) =>
     components.map((comp, i) => {
       const codes: string[] = [];
       if (comp.manufacturerCode) codes.push(comp.manufacturerCode);
       if (comp.ean) codes.push(comp.ean);
 
-      const compItem: ParsedItem = {
-        name: comp.name,
-        unit: "ks",
-        quantity: comp.quantity,
-        instruction: groupContext?.preferredManufacturer
-          ? `Preferuj výrobce: ${groupContext.preferredManufacturer}${groupContext.preferredLine ? `, řada: ${groupContext.preferredLine}` : ""}`
-          : null,
-        extraLookupCodes: codes.length > 0 ? codes : undefined,
-      };
+      const instructionParts: string[] = [];
+      if (item.setHint) instructionParts.push(`Komponenta patří do řady: ${item.setHint}. Pokud katalogový kód odpovídá, přijmi produkt.`);
+      if (groupContext?.preferredManufacturer) {
+        instructionParts.push(`Preferuj výrobce: ${groupContext.preferredManufacturer}${groupContext.preferredLine ? `, řada: ${groupContext.preferredLine}` : ""}`);
+      }
 
-      return searchPipelineForItem(compItem, position * 100 + i, onDebug, preferences, groupContext);
-    }),
-  );
+      return {
+        comp,
+        item: {
+          name: comp.name,
+          unit: "ks",
+          quantity: comp.quantity,
+          instruction: instructionParts.length > 0 ? instructionParts.join(". ") : null,
+          extraLookupCodes: codes.length > 0 ? codes : undefined,
+        } as ParsedItem,
+        idx: i,
+      };
+    });
+
+  // Try variants in order — use the first one where ALL components are found.
+  let componentResults: PipelineResult[] = [];
+  let usedVariant = variants[0]!;
+
+  for (const variant of variants) {
+    onDebug?.({ position, step: "set_variant_try", data: { variantName: variant.name, componentCount: variant.components.length } });
+
+    const searchItems = buildSearchItems(variant.components);
+    const results = await Promise.all(
+      searchItems.map(({ item: compItem, idx }) =>
+        runSearch(compItem, position * 100 + idx, onDebug, preferences, groupContext),
+      ),
+    );
+
+    const allFound = results.every((r) => r.matchType !== "not_found");
+    if (allFound || variant === variants[variants.length - 1]) {
+      // All found, or this is the last variant — use it regardless
+      componentResults = results;
+      usedVariant = variant;
+      onDebug?.({ position, step: "set_variant_selected", data: { variantName: variant.name, allFound } });
+      break;
+    }
+
+    onDebug?.({ position, step: "set_variant_skip", data: { variantName: variant.name, foundCount: results.filter((r) => r.matchType !== "not_found").length } });
+  }
 
   const totalPipelineMs = Date.now() - t0;
 
@@ -1386,7 +1514,7 @@ export async function searchPipelineForSet(
     unit: item.unit,
     quantity: item.quantity,
     isSet: true,
-    components: components.map((comp, i) => ({
+    components: usedVariant.components.map((comp, i) => ({
       ...comp,
       result: componentResults[i]!,
     })),

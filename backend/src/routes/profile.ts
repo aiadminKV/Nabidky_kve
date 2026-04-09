@@ -105,7 +105,7 @@ profileRouter.post("/profile/change-password", async (c) => {
   );
 
   if (updateError) {
-    console.error("[change-password] Update failed:", updateError.message);
+    (await import("../services/logger.js")).logger.error({ err: updateError.message }, "change-password update failed");
     return c.json({ error: "Nepodařilo se změnit heslo." }, 500);
   }
 

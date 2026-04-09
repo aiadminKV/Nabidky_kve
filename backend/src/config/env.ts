@@ -11,6 +11,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   FRONTEND_URL: z.string().default("http://localhost:3000"),
+  SYNC_WEBHOOK_URL: z.string().url().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

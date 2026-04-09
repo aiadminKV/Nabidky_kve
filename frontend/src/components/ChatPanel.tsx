@@ -3,25 +3,29 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type DragEvent, type ReactNode } from "react";
 import type { ChatMessage, ToolCallStatus, FileAttachment } from "@/lib/types";
 
-const TOOL_ICONS: Record<string, string> = {
-  search_product: "🔍",
-  get_category_info: "📂",
-  add_item_to_offer: "➕",
-  replace_product_in_offer: "🔄",
-  remove_item_from_offer: "🗑",
-  parse_items_from_text: "📋",
-  update_offer_header: "📝",
-  reading_image: "🖼️",
-  transcribing: "🎙️",
+const TOOL_SVG_PATHS: Record<string, string> = {
+  search_product: "M21 21l-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z",
+  get_category_info: "M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z M6 6h.008v.008H6V6Z",
+  add_item_to_offer: "M12 4.5v15m7.5-7.5h-15",
+  replace_product_in_offer: "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99",
+  remove_item_from_offer: "m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0",
+  parse_items_from_text: "M8.25 6.75h7.5M8.25 12h7.5m-7.5 5.25h7.5M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z",
+  reading_image: "m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z",
+  transcribing: "M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z",
+  default: "M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
 };
 
 function ToolCallChip({ tc }: { tc: ToolCallStatus }) {
-  const icon = TOOL_ICONS[tc.tool] ?? "⚙️";
+  const pathData = TOOL_SVG_PATHS[tc.tool] ?? TOOL_SVG_PATHS.default;
   const isRunning = tc.status === "running";
 
   return (
     <div className="flex items-center gap-1.5 text-xs text-kv-gray-500">
-      <span>{icon}</span>
+      <svg className="h-3.5 w-3.5 shrink-0 text-kv-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        {pathData.split(" M").map((segment, i) => (
+          <path key={i} strokeLinecap="round" strokeLinejoin="round" d={i === 0 ? segment : `M${segment}`} />
+        ))}
+      </svg>
       <span className={isRunning ? "animate-pulse" : ""}>{tc.label}</span>
       {isRunning ? (
         <svg className="h-3 w-3 animate-spin text-kv-gray-400" viewBox="0 0 24 24" fill="none">
@@ -332,10 +336,9 @@ export function ChatPanel({ messages, isProcessing, onSendMessage, onPasteDetect
       e.preventDefault();
       const trimmed = input.trim();
       const hasFiles = pendingFiles.length > 0;
-      const nonAudioFiles = pendingFiles.filter((file) => file.type !== "audio");
-      const fallbackText = nonAudioFiles.length > 0
-        ? `[Soubor: ${nonAudioFiles.map((file) => file.filename).join(", ")}]`
-        : "";
+      // Audio files don't show a visual preview, so use a text fallback for them
+      const audioOnly = pendingFiles.length > 0 && pendingFiles.every((f) => f.type === "audio");
+      const fallbackText = audioOnly ? "[Hlasová zpráva]" : "";
       if ((!trimmed && !hasFiles) || isProcessing) return;
       onSendMessage(trimmed || fallbackText, hasFiles ? pendingFiles : undefined);
       setInput("");

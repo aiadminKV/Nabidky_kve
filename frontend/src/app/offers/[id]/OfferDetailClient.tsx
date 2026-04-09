@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Header } from "@/components/Header";
 import { ChatPanel } from "@/components/ChatPanel";
 import { AgentDebugPanel } from "@/components/AgentDebugPanel";
-import { PasteConfirmModal } from "@/components/PasteConfirmModal";
+import { ColumnMapperModal } from "@/components/ColumnMapperModal";
 import { ParsedItemsTable } from "@/components/ParsedItemsTable";
 import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
@@ -13,9 +13,8 @@ import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { OfferHeaderSummary } from "@/components/OfferHeaderSummary";
 import { PreSearchModal } from "@/components/PreSearchModal";
 import { createClient } from "@/lib/supabase/client";
-import { parsePastedText } from "@/lib/parsePaste";
 import {
-  offerChat, searchItems, searchProducts, downloadXlsx, downloadSapXlsx, sendSapEmail,
+  offerChat, searchItems, downloadXlsx, downloadSapXlsx, sendSapEmail,
   getOffer, saveOfferMessages, saveOfferItems, updateOffer, getSearchPlan, searchItemWithStockLevel,
   type ChatMessageDTO, type SaveOfferItemInput, type SearchPlan,
 } from "@/lib/api";
@@ -55,12 +54,11 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const [searchingSet, setSearchingSet] = useState<Set<string>>(new Set());
   const [reviewItem, setReviewItem] = useState<OfferItem | null>(null);
   const [isParsingChat, setIsParsingChat] = useState(false);
-  const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
   const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [preSearchOpen, setPreSearchOpen] = useState(false);
   // "full" = initial search from parsedItems, "again" = re-run from offerItems, "not_found" = step-2 only
-  const [preSearchAction, setPreSearchAction] = useState<"full" | "again" | "not_found">("full");
+  const [preSearchAction, setPreSearchAction] = useState<"full" | "again">("full");
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<DebugEntry[]>([]);
   const [changedPositions, setChangedPositions] = useState<Set<number>>(new Set());
@@ -629,11 +627,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       } finally {
         setIsParsingChat(false);
         setMessages((prev) => {
-          let next = prev.map((m) =>
-            m.id === streamingMsgId && m.isStreaming
-              ? { ...m, isStreaming: false, toolCalls: (m.toolCalls ?? []).map((tc) => ({ ...tc, status: "done" as const })) }
-              : m,
-          );
+          let next = prev.map((m) => {
+            if (m.id !== streamingMsgId) return m;
+            // Always finalize: clear streaming flag and mark any still-running tool calls as done
+            const toolCalls = (m.toolCalls ?? []).map((tc) =>
+              tc.status === "running" ? { ...tc, status: "done" as const } : tc,
+            );
+            return { ...m, isStreaming: false, toolCalls };
+          });
           next = next.filter((m) => !(m.id === streamingMsgId && !m.text.trim() && !(m.toolCalls?.length)));
           debouncedSaveMessages(next);
           return next;
@@ -651,9 +652,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setPendingPaste(text);
   }, []);
 
-  const handlePasteImport = useCallback(() => {
-    if (!pendingPaste) return;
-    const items = parsePastedText(pendingPaste);
+  const handlePasteImport = useCallback((items: ParsedItem[]) => {
     if (phase === "review" && offerItems.length > 0) {
       const maxPos = Math.max(...offerItems.map((i) => i.position));
       const newOfferItems: OfferItem[] = items.map((item, i) => ({
@@ -682,7 +681,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       addMessage("system", `Rozpoznáno ${items.length} položek z tabulky. Zkontrolujte a klikněte Zpracovat.`);
     }
     setPendingPaste(null);
-  }, [pendingPaste, phase, offerItems, addMessage, debouncedSaveItems]);
+  }, [phase, offerItems, addMessage, debouncedSaveItems]);
 
   const handlePasteSendAsMessage = useCallback(() => {
     if (!pendingPaste) return;
@@ -711,13 +710,10 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           name: ei.name,
           unit: ei.unit,
           quantity: ei.quantity,
-          instruction: ei.instruction,
-          isSet: ei.isSet ?? false,
-          setHint: ei.setHint ?? null,
         }))
       : validItems.map((i) => ({ name: i.name, unit: i.unit, quantity: i.quantity }));
 
-    // Extract per-item groupContexts from the plan (manufacturer/line preferences)
+    // Extract per-item groupContexts from the plan (manufacturer/line set by user in SearchPlanPanel)
     let groupContexts: Record<number, { preferredManufacturer: string | null; preferredLine: string | null }> | undefined;
     if (plan) {
       groupContexts = {};
@@ -846,10 +842,17 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
               return next;
             });
             flashPosition(data.position);
+            const gc = groupContexts?.[data.position];
             setOfferItems((prev) => {
               const next = prev.map((item) =>
                 item.itemId === id
-                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
+                  ? {
+                      ...item, ...data, itemId: id,
+                      extraColumns: item.extraColumns,
+                      reviewStatus: "ai_suggestion" as const,
+                      appliedManufacturer: gc?.preferredManufacturer ?? null,
+                      appliedLine: gc?.preferredLine ?? null,
+                    }
                   : item,
               );
               debouncedSaveItems(next);
@@ -886,11 +889,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setPreSearchOpen(false);
     handleHeaderChange({ ...offerHeader, searchPreferences: prefs });
 
-    if (preSearchAction === "not_found") {
-      await handleProcessNotFoundWithPrefs(prefs);
-      return;
-    }
-
     // "full" = from parsedItems (initial), "again" = from existing offerItems
     const sourceItems: ParsedItem[] = preSearchAction === "again"
       ? offerItems
@@ -924,73 +922,6 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   // ──────────────────────────────────────────────────────────
 
   // Internal: runs search for not-found items with given prefs
-  const handleProcessNotFoundWithPrefs = useCallback(async (prefs: SearchPreferences) => {
-    const notFoundItems = offerItems.filter(
-      (i) => i.matchType === "not_found" && !i.confirmed,
-    );
-    if (notFoundItems.length === 0) return;
-
-    const posToIdMap = new Map(notFoundItems.map((i) => [i.position, i.itemId]));
-    setIsSearchingSemantic(true);
-    setSearchingSet(new Set(notFoundItems.map((i) => i.itemId)));
-    addMessage("system", `Spouštím vyhledávání pro ${notFoundItems.length} nenalezených položek…`);
-
-    try {
-      const token = await getToken();
-      const stream = searchItems(
-        notFoundItems.map((i) => ({
-          name: i.originalName,
-          unit: i.unit,
-          quantity: i.quantity,
-          position: i.position,
-        })),
-        token,
-        prefs,
-      );
-
-      for await (const event of stream) {
-        if (event.type === "item_matched") {
-          const data = event.data as unknown as OfferItem;
-          const id = posToIdMap.get(data.position);
-          if (id) {
-            setSearchingSet((prev) => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
-            setOfferItems((prev) => {
-              const next = prev.map((item) =>
-                item.itemId === id
-                  ? { ...item, ...data, itemId: id, extraColumns: item.extraColumns, reviewStatus: "ai_suggestion" as const }
-                  : item,
-              );
-              debouncedSaveItems(next);
-              return next;
-            });
-          }
-        } else if (event.type === "status" && event.data.phase === "review") {
-          setSearchingSet(new Set());
-          addMessage("system", "Sémantické vyhledávání dokončeno.");
-        } else if (event.type === "error") {
-          addMessage("system", `Chyba: ${event.data.message}`);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Nastala chyba";
-      addMessage("system", `Chyba: ${msg}`);
-    } finally {
-      setSearchingSet(new Set());
-      setIsSearchingSemantic(false);
-    }
-  }, [offerItems, addMessage, getToken, debouncedSaveItems]);
-
-  // "Zpracovat nenalezené" — opens PreSearchModal, step 2 only
-  const handleProcessNotFound = useCallback(() => {
-    const notFoundItems = offerItems.filter((i) => i.matchType === "not_found" && !i.confirmed);
-    if (notFoundItems.length === 0) return;
-    setPreSearchAction("not_found");
-    setPreSearchOpen(true);
-  }, [offerItems]);
 
   // ──────────────────────────────────────────────────────────
   // Review handlers
@@ -1028,7 +959,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
   const handleSkip = useCallback((item: OfferItem) => {
     setOfferItems((prev) => {
       const next = prev.map((i) =>
-        i.position === item.position
+        i.itemId === item.itemId
           ? {
               ...i,
               originalName: item.originalName,
@@ -1045,26 +976,50 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
     setReviewItem(null);
   }, [debouncedSaveItems]);
 
-  const handleManualSearch = useCallback(
-    async (query: string): Promise<Product[]> => {
-      const token = await getToken();
-      return searchProducts(query, token);
-    },
-    [getToken],
-  );
+  const handleSaveEdits = useCallback((item: OfferItem) => {
+    setOfferItems((prev) => {
+      const next = prev.map((i) =>
+        i.itemId === item.itemId
+          ? { ...i, originalName: item.originalName, quantity: item.quantity, unit: item.unit }
+          : i,
+      );
+      debouncedSaveItems(next);
+      return next;
+    });
+  }, [debouncedSaveItems]);
+
+  const handleQuickConfirm = useCallback((itemId: string) => {
+    setOfferItems((prev) => {
+      const next = prev.map((i) =>
+        i.itemId === itemId
+          ? { ...i, confirmed: true, reviewStatus: "reviewed" as const, matchType: "match" as const, confidence: 100 }
+          : i,
+      );
+      debouncedSaveItems(next);
+      return next;
+    });
+  }, [debouncedSaveItems]);
 
   const handleSearchWithStockLevel = useCallback(
-    async (item: OfferItem, level: StockLevel) => {
+    async (item: OfferItem, level: StockLevel, opts?: { manufacturer?: string; branchCode?: string }) => {
       const token = await getToken();
       setReviewItem(null);
       setSearchingSet((prev) => new Set(prev).add(item.itemId));
+
+      const basePrefs = offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES;
+      const prefs = opts?.branchCode
+        ? { ...basePrefs, branchFilter: opts.branchCode }
+        : basePrefs;
+      const groupContext = opts?.manufacturer
+        ? { preferredManufacturer: opts.manufacturer, preferredLine: null }
+        : undefined;
 
       try {
         const sse = searchItemWithStockLevel(
           { name: item.originalName, unit: item.unit, quantity: item.quantity },
           token,
-          offerHeader.searchPreferences ?? DEFAULT_SEARCH_PREFERENCES,
-          undefined,
+          prefs,
+          groupContext,
           level,
         );
         for await (const event of sse) {
@@ -1427,13 +1382,12 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
             onExport={handleExport}
             onSendSap={handleSendToSap}
             onReset={handleReset}
-            onProcessNotFound={handleProcessNotFound}
             onProcessAgain={handleProcessAgain}
             onAddItem={handleAddItem}
             onDeleteItem={handleDeleteItem}
             onReorder={handleReorder}
             onInsertAt={handleInsertAt}
-            isSearchingSemantic={isSearchingSemantic}
+            onQuickConfirm={handleQuickConfirm}
             isProcessing={searchingSet.size > 0}
             token={cachedToken}
           />
@@ -1503,7 +1457,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
           onConfirm={handleConfirm}
           onSkip={handleSkip}
           onClose={() => setReviewItem(null)}
-          onManualSearch={handleManualSearch}
+          onSaveEdits={handleSaveEdits}
           onSearchWithStockLevel={handleSearchWithStockLevel}
           token={cachedToken}
         />
@@ -1511,7 +1465,7 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* TSV paste confirmation modal */}
       {pendingPaste && (
-        <PasteConfirmModal
+        <ColumnMapperModal
           text={pendingPaste}
           onImport={handlePasteImport}
           onSendAsMessage={handlePasteSendAsMessage}
@@ -1520,8 +1474,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
       )}
 
       {isHeaderModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-6xl rounded-2xl border border-white/20 bg-white shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 p-4 backdrop-blur-sm"
+          onClick={() => setIsHeaderModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-6xl rounded-2xl border border-white/20 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-start justify-between gap-4 border-b border-kv-gray-200 px-6 py-4">
               <h3 className="text-base font-semibold text-kv-navy">Detail zákazníka</h3>
               <button
@@ -1542,8 +1502,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* SAP email – confirmation modal */}
       {sapEmailModal === "confirm" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setSapEmailModal("closed")}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-kv-navy/10">
               <svg className="h-6 w-6 text-kv-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
@@ -1589,8 +1555,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* SAP email – sending state */}
       {sapEmailModal === "sending" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-xs overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6 text-center">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setSapEmailModal("closed")}
+        >
+          <div
+            className="w-full max-w-xs overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-kv-navy/10">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-kv-gray-300 border-t-kv-navy" />
             </div>
@@ -1602,8 +1574,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* SAP email – success */}
       {sapEmailModal === "success" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setSapEmailModal("closed")}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
               <svg className="h-6 w-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
@@ -1627,8 +1605,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* SAP email – error */}
       {sapEmailModal === "error" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setSapEmailModal("closed")}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
               <svg className="h-6 w-6 text-kv-red" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
@@ -1658,8 +1642,14 @@ export function OfferDetailClient({ offerId, email, isAdmin }: OfferDetailClient
 
       {/* Export warning modal – unreviewed AI suggestions */}
       {exportWarning !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-kv-navy/60 backdrop-blur-sm"
+          onClick={() => setExportWarning(null)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl border border-white/20 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-50">
               <svg className="h-6 w-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />

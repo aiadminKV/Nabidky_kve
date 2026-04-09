@@ -444,7 +444,9 @@ function computeDiff(
       result.matklChanges.push({ matnr, old: old.matkl, new_: nw.matkl });
     if (old.dispo !== nw.dispo)
       result.dispoChanges.push({ matnr, old: old.dispo, new_: nw.dispo });
-    if (old.description !== nw.description)
+    // Only track description changes where DB already has a value — null→text transitions
+    // are handled by the separate backfill worker, not the daily sync.
+    if (old.description !== null && old.description !== nw.description)
       result.descriptionChanges.push({ matnr, old: old.description, new_: nw.description });
   }
 
@@ -479,31 +481,110 @@ function printDiffReport(d: DiffResult): void {
   console.log("═".repeat(65) + "\n");
 }
 
-// ─── Phase 3b: Threshold Check ───────────────────────────────────────
+// ─── Phase 3b: Per-Phase Threshold Evaluation ────────────────────────
+//
+// Each change type is evaluated independently.
+// Result per phase: "proceed" | "skip" | "abort"
+//
+//  Stock + Price  → always proceed (no threshold — just numbers, safe)
+//  New products   → skip if over threshold (alert sent, others continue)
+//  Removals       → abort if row drop % is critical (real data loss risk)
+//                   skip if absolute count over threshold
+//  Metadata       → skip if over threshold (names + supplier changes)
+//  Descriptions   → skip if over threshold (only real text→text changes)
+//  Re-embed       → skip if over threshold (will catch up next day)
 
-function checkThresholds(d: DiffResult): string[] {
-  const violations: string[] = [];
+type PhaseDecision = "proceed" | "skip" | "abort";
 
-  if (d.newProducts.length > T_NEW_PRODUCTS)
-    violations.push(`New products (${fmt(d.newProducts.length)}) exceeds threshold (${fmt(T_NEW_PRODUCTS)})`);
-  if (d.removedProducts.length > T_REMOVED)
-    violations.push(`Removed products (${fmt(d.removedProducts.length)}) exceeds threshold (${fmt(T_REMOVED)})`);
-  if (d.nameChanges.length > T_NAME_CHANGES)
-    violations.push(`Name changes (${fmt(d.nameChanges.length)}) exceeds threshold (${fmt(T_NAME_CHANGES)})`);
-  if (d.descriptionChanges.length > T_DESCRIPTION_CHANGES)
-    violations.push(`Description changes (${fmt(d.descriptionChanges.length)}) exceeds threshold (${fmt(T_DESCRIPTION_CHANGES)}) — use --force for initial bulk migration`);
+interface PhaseDecisions {
+  newProducts: PhaseDecision;
+  removals: PhaseDecision;
+  metadata: PhaseDecision;
+  descriptions: PhaseDecision;
+  reembed: PhaseDecision;
+}
 
-  const reembed = d.newProducts.length + d.nameChanges.length + d.supplierChanges.length + d.descriptionChanges.length;
-  if (reembed > T_REEMBED)
-    violations.push(`Re-embed count (${fmt(reembed)}) exceeds threshold (${fmt(T_REEMBED)})`);
+async function evaluatePhases(d: DiffResult): Promise<PhaseDecisions> {
+  const decisions: PhaseDecisions = {
+    newProducts: "proceed",
+    removals: "proceed",
+    metadata: "proceed",
+    descriptions: "proceed",
+    reembed: "proceed",
+  };
 
+  const alerts: string[] = [];
+
+  // Row drop check — abort if critical (FORCE overrides)
   if (d.oldTotal > 0) {
     const dropPct = ((d.oldTotal - d.newTotal) / d.oldTotal) * 100;
-    if (dropPct > T_ROW_DROP_PCT)
-      violations.push(`Row count dropped by ${dropPct.toFixed(1)}% (threshold ${T_ROW_DROP_PCT}%)`);
+    if (dropPct > T_ROW_DROP_PCT) {
+      const msg = `Row count dropped by ${dropPct.toFixed(1)}% (threshold ${T_ROW_DROP_PCT}%) — ABORT`;
+      if (FORCE) {
+        log({ phase: "threshold:removals", status: "warn", message: `${msg} — overridden by --force` });
+      } else {
+        decisions.removals = "abort";
+        alerts.push(msg);
+      }
+    }
   }
 
-  return violations;
+  // Removals absolute count
+  if (decisions.removals !== "abort" && d.removedProducts.length > T_REMOVED) {
+    const msg = `Removed products (${fmt(d.removedProducts.length)}) exceeds threshold (${fmt(T_REMOVED)}) — SKIP`;
+    decisions.removals = FORCE ? "proceed" : "skip";
+    if (!FORCE) alerts.push(msg);
+    log({ phase: "threshold:removals", status: FORCE ? "warn" : "alert", message: msg });
+  }
+
+  // New products
+  if (d.newProducts.length > T_NEW_PRODUCTS) {
+    const msg = `New products (${fmt(d.newProducts.length)}) exceeds threshold (${fmt(T_NEW_PRODUCTS)}) — SKIP`;
+    decisions.newProducts = FORCE ? "proceed" : "skip";
+    if (!FORCE) alerts.push(msg);
+    log({ phase: "threshold:new", status: FORCE ? "warn" : "alert", message: msg });
+  }
+
+  // Metadata (names + supplier)
+  if (d.nameChanges.length > T_NAME_CHANGES) {
+    const msg = `Name changes (${fmt(d.nameChanges.length)}) exceeds threshold (${fmt(T_NAME_CHANGES)}) — SKIP`;
+    decisions.metadata = FORCE ? "proceed" : "skip";
+    if (!FORCE) alerts.push(msg);
+    log({ phase: "threshold:metadata", status: FORCE ? "warn" : "alert", message: msg });
+  }
+
+  // Descriptions (only real text→text changes counted, null→text handled by backfill worker)
+  if (d.descriptionChanges.length > T_DESCRIPTION_CHANGES) {
+    const msg = `Description changes (${fmt(d.descriptionChanges.length)}) exceeds threshold (${fmt(T_DESCRIPTION_CHANGES)}) — SKIP`;
+    decisions.descriptions = FORCE ? "proceed" : "skip";
+    if (!FORCE) alerts.push(msg);
+    log({ phase: "threshold:descriptions", status: FORCE ? "warn" : "alert", message: msg });
+  }
+
+  // Re-embed (sum of changes that require new embedding)
+  const reembedCount = d.newProducts.length + d.nameChanges.length + d.supplierChanges.length + d.descriptionChanges.length;
+  if (reembedCount > T_REEMBED) {
+    const msg = `Re-embed count (${fmt(reembedCount)}) exceeds threshold (${fmt(T_REEMBED)}) — SKIP`;
+    decisions.reembed = FORCE ? "proceed" : "skip";
+    if (!FORCE) alerts.push(msg);
+    log({ phase: "threshold:reembed", status: FORCE ? "warn" : "alert", message: msg });
+  }
+
+  if (alerts.length > 0) {
+    await sendWebhook("alert", `Threshold alerts (sync continues for safe phases):\n${alerts.join("\n")}`);
+  }
+
+  // Log final decisions
+  const skipped = Object.entries(decisions).filter(([, v]) => v === "skip").map(([k]) => k);
+  const aborted = Object.entries(decisions).filter(([, v]) => v === "abort").map(([k]) => k);
+  if (skipped.length > 0)
+    log({ phase: "threshold", status: "warn", message: `Phases SKIPPED: ${skipped.join(", ")}` });
+  if (aborted.length > 0)
+    log({ phase: "threshold", status: "error", message: `Phases ABORTED: ${aborted.join(", ")}` });
+  if (skipped.length === 0 && aborted.length === 0)
+    log({ phase: "threshold", status: "info", message: "All phases within threshold — proceeding" });
+
+  return decisions;
 }
 
 // ─── Phase 4: MATNR → ID Resolution (via direct pg for speed) ────────
@@ -565,6 +646,7 @@ async function applyChanges(
   categoryLookup: Map<string, string>,
   statusPurchaseMap: Map<string, string>,
   statusSalesMap: Map<string, string>,
+  decisions: PhaseDecisions,
 ): Promise<void> {
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -584,7 +666,9 @@ async function applyChanges(
   }
 
   // 5a: Insert new products
-  if (diff.newProducts.length > 0) {
+  if (decisions.newProducts === "skip") {
+    log({ phase: "apply:new", status: "warn", message: `SKIPPED — threshold exceeded (${fmt(diff.newProducts.length)} new products)` });
+  } else if (diff.newProducts.length > 0) {
     log({ phase: "apply:new", status: "info", message: `Inserting ${fmt(diff.newProducts.length)} new products...` });
     const t = Date.now();
     let inserted = 0;
@@ -675,8 +759,11 @@ async function applyChanges(
     });
   }
 
-  // 5b: Update metadata (name, supplier, status, category, dispo) — batch via pg
-  const metaUpdates = collectMetadataUpdates(diff, newMap, categoryLookup, statusPurchaseMap, statusSalesMap);
+  // 5b: Update metadata (name, supplier, status, category, dispo, description) — batch via pg
+  if (decisions.metadata === "skip" && decisions.descriptions === "skip") {
+    log({ phase: "apply:meta", status: "warn", message: `SKIPPED — both metadata and descriptions phases are skipped` });
+  } else {
+  const metaUpdates = collectMetadataUpdates(diff, newMap, categoryLookup, statusPurchaseMap, statusSalesMap, decisions);
   if (metaUpdates.size > 0) {
     log({ phase: "apply:meta", status: "info", message: `Updating metadata for ${fmt(metaUpdates.size)} products via pg...` });
     const t = Date.now();
@@ -723,8 +810,9 @@ async function applyChanges(
       message: `Updated ${fmt(updated)} products (${errors} errors) in ${elapsed(t)}`,
     });
   }
+  } // end metadata/descriptions block
 
-  // 5c: Upsert prices
+  // 5c: Upsert prices — always proceed (safe, no threshold)
   if (diff.priceChanges.length > 0) {
     log({ phase: "apply:prices", status: "info", message: `Upserting ${fmt(diff.priceChanges.length)} prices...` });
     const t = Date.now();
@@ -822,7 +910,9 @@ async function applyChanges(
   }
 
   // 5e: Soft-delete removed products
-  if (diff.removedProducts.length > 0) {
+  if (decisions.removals === "skip") {
+    log({ phase: "apply:remove", status: "warn", message: `SKIPPED — threshold exceeded (${fmt(diff.removedProducts.length)} removals)` });
+  } else if (diff.removedProducts.length > 0) {
     log({ phase: "apply:remove", status: "info", message: `Soft-deleting ${fmt(diff.removedProducts.length)} products...` });
     const t = Date.now();
 
@@ -1070,6 +1160,7 @@ function collectMetadataUpdates(
   categoryLookup: Map<string, string>,
   statusPurchaseMap: Map<string, string>,
   statusSalesMap: Map<string, string>,
+  decisions: PhaseDecisions,
 ): Map<string, Record<string, unknown>> {
   const updates = new Map<string, Record<string, unknown>>();
 
@@ -1078,18 +1169,21 @@ function collectMetadataUpdates(
     return updates.get(matnr)!;
   }
 
-  for (const c of diff.nameChanges) {
-    const patch = getOrCreate(c.matnr);
-    patch.name = c.new_;
-    patch.embedding_stale = true;
+  // Metadata phase: names + supplier (skip if threshold exceeded)
+  if (decisions.metadata === "proceed") {
+    for (const c of diff.nameChanges) {
+      const patch = getOrCreate(c.matnr);
+      patch.name = c.new_;
+      patch.embedding_stale = true;
+    }
+    for (const c of diff.supplierChanges) {
+      const patch = getOrCreate(c.matnr);
+      patch.supplier_name = c.new_ || null;
+      patch.embedding_stale = true;
+    }
   }
 
-  for (const c of diff.supplierChanges) {
-    const patch = getOrCreate(c.matnr);
-    patch.supplier_name = c.new_ || null;
-    patch.embedding_stale = true;
-  }
-
+  // Status, category, dispo — always apply (low risk, no threshold)
   for (const c of diff.statusChanges) {
     const patch = getOrCreate(c.matnr);
     if (c.field === "MSTAE") {
@@ -1116,10 +1210,13 @@ function collectMetadataUpdates(
     patch.is_stock_item = isStockItem(c.new_);
   }
 
-  for (const c of diff.descriptionChanges) {
-    const patch = getOrCreate(c.matnr);
-    patch.description = c.new_ || null;
-    patch.embedding_stale = true;
+  // Description phase — skip if threshold exceeded
+  if (decisions.descriptions === "proceed") {
+    for (const c of diff.descriptionChanges) {
+      const patch = getOrCreate(c.matnr);
+      patch.description = c.new_ || null;
+      patch.embedding_stale = true;
+    }
   }
 
   return updates;
@@ -1161,24 +1258,17 @@ async function main() {
         loadDbSnapshot(),
       ]);
 
-    // Phase 3: Diff + thresholds
+    // Phase 3: Diff + per-phase threshold evaluation
     const diff = computeDiff(oldMap, newMap, oldWh, newWh);
     printDiffReport(diff);
 
-    const violations = checkThresholds(diff);
-    if (violations.length > 0) {
-      for (const v of violations) {
-        log({ phase: "threshold", status: "alert", message: v });
-      }
+    const decisions = await evaluatePhases(diff);
 
-      if (!FORCE) {
-        const alertMsg = `Threshold violations:\n${violations.join("\n")}\nSync aborted. Use --force to override.`;
-        await sendWebhook("alert", alertMsg);
-        console.log("\n  SYNC ABORTED — threshold violations detected. Use --force to override.\n");
-        process.exit(1);
-      } else {
-        log({ phase: "threshold", status: "warn", message: "Thresholds exceeded but --force is set, continuing..." });
-      }
+    if (decisions.removals === "abort") {
+      const msg = `Row count drop exceeds critical threshold — sync ABORTED. Use --force to override.`;
+      await sendWebhook("alert", msg);
+      console.log(`\n  SYNC ABORTED — ${msg}\n`);
+      process.exit(1);
     }
 
     if (DRY_RUN) {
@@ -1198,15 +1288,17 @@ async function main() {
 
     log({ phase: "lookups", status: "info", message: `Categories: ${fmt(categoryLookup.size)}, Status purchase: ${fmt(statusLookups.purchase.size)}, Status sales: ${fmt(statusLookups.sales.size)}` });
 
-    // Phase 5: Apply
+    // Phase 5: Apply (per-phase decisions gate each sub-phase)
     log({ phase: "apply", status: "info", message: "Applying changes..." });
-    await applyChanges(diff, newMap, matnrIds, branchIds, categoryLookup, statusLookups.purchase, statusLookups.sales);
+    await applyChanges(diff, newMap, matnrIds, branchIds, categoryLookup, statusLookups.purchase, statusLookups.sales, decisions);
 
     // Phase 6: Re-embed
-    if (!SKIP_EMBED) {
-      await reembed();
-    } else {
+    if (SKIP_EMBED) {
       log({ phase: "embed", status: "info", message: "Skipped (--skip-embed)" });
+    } else if (decisions.reembed === "skip") {
+      log({ phase: "embed", status: "warn", message: "Skipped — re-embed threshold exceeded (will catch up next run)" });
+    } else {
+      await reembed();
     }
 
     // Phase 7: Cleanup — remove downloaded CSV (baseline is now always DB)

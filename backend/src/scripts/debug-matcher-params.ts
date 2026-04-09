@@ -1,5 +1,5 @@
 import "../../src/config/env";
-import { searchPipelineForItem } from "../services/searchPipeline";
+import { searchPipelineV2ForItem } from "../services/searchPipelineV2.js";
 
 // Suite B problémové případy — co MATCHER dostane a co vrátí
 const cases = [
@@ -25,7 +25,7 @@ const cases = [
 async function main() {
   for (const c of cases) {
     console.log(`\n=== ${c.label} ===`);
-    const result = await searchPipelineForItem(c.item, 0, (dbg) => {
+    const result = await searchPipelineV2ForItem(c.item, 0, (dbg) => {
       if (dbg.step === "matcher") {
         console.log(`  MATCHER shortlist (${dbg.data.shortlistSize}):`);
         const sl = dbg.data as { shortlistSize: number; reasoning: string; topMatch: { sku: string; matchScore: number; reasoning: string } | null };

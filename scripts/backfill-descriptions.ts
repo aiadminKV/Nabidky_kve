@@ -32,11 +32,13 @@ const IDS_FILE = process.argv.find((a) => a.startsWith("--ids-file="))?.split("=
 const BATCH_SIZE = parseInt(
   process.argv.find((a) => a.startsWith("--batch="))?.split("=")[1]
   || process.argv[process.argv.indexOf("--batch") + 1]
-  || "1000",
+  || "2000",
 );
 const DRY_RUN = process.argv.includes("--dry-run");
 const STATUS_ONLY = process.argv.includes("--status");
 const ALL = process.argv.includes("--all");
+const IN_STOCK = process.argv.includes("--in-stock");   // only is_stock_item = true
+const NO_STALE = process.argv.includes("--no-stale");   // skip setting embedding_stale = true
 
 // Load target IDs if --ids-file provided
 let targetIds: number[] | null = null;
@@ -44,6 +46,8 @@ if (IDS_FILE) {
   targetIds = JSON.parse(readFileSync(IDS_FILE, "utf8")) as number[];
   console.log(`  Targeted mode: ${targetIds.length.toLocaleString("cs-CZ")} IDs from ${IDS_FILE}`);
 }
+if (IN_STOCK) console.log(`  Filter: is_stock_item = true (skladovky only)`);
+if (NO_STALE) console.log(`  Stale flag: OFF (embedding_stale will NOT be set)`);
 
 function fmt(n: number): string { return n.toLocaleString("cs-CZ"); }
 function elapsed(t: number): string { return `${((Date.now() - t) / 1000).toFixed(1)}s`; }
@@ -63,9 +67,10 @@ interface DbHealth {
 }
 
 async function getDbHealth(client: pg.Client, ids: number[] | null): Promise<DbHealth> {
-  const filter = ids
-    ? `AND id = ANY('{${ids.join(",")}}'::int[])`
-    : "";
+  const filter = [
+    ids ? `AND id = ANY('{${ids.join(",")}}'::int[])` : "",
+    IN_STOCK ? "AND is_stock_item = true" : "",
+  ].join(" ");
   const { rows } = await client.query<DbHealth>(`
     SELECT
       (pg_database_size(current_database()) / 1048576)::int           AS db_size_mb,
@@ -143,9 +148,10 @@ async function main() {
       const idFilter = targetIds
         ? `AND id = ANY('{${targetIds.join(",")}}'::int[])`
         : "";
+      const stockFilter = IN_STOCK ? `AND is_stock_item = true` : "";
       const { rows: products } = await writeClient.query<{ id: number; source_matnr: string }>(
         `SELECT id, source_matnr FROM products_v2
-         WHERE description IS NULL AND removed_at IS NULL ${idFilter}
+         WHERE description IS NULL AND removed_at IS NULL ${idFilter} ${stockFilter}
          ORDER BY id LIMIT $1`,
         [BATCH_SIZE],
       );
@@ -176,12 +182,23 @@ async function main() {
         break;
       }
 
-      // Write in single transaction — set embedding_stale so Phase 6 re-embeds these
+      // Single bulk UPDATE via unnest — one round-trip instead of N
+      const ids = updates.map((u) => u.id);
+      const descs = updates.map((u) => u.description);
       await writeClient.query("BEGIN");
-      for (const u of updates) {
+      if (NO_STALE) {
         await writeClient.query(
-          "UPDATE products_v2 SET description = $1, embedding_stale = true WHERE id = $2",
-          [u.description, u.id],
+          `UPDATE products_v2 SET description = vals.d
+           FROM unnest($1::int[], $2::text[]) AS vals(id, d)
+           WHERE products_v2.id = vals.id`,
+          [ids, descs],
+        );
+      } else {
+        await writeClient.query(
+          `UPDATE products_v2 SET description = vals.d, embedding_stale = true
+           FROM unnest($1::int[], $2::text[]) AS vals(id, d)
+           WHERE products_v2.id = vals.id`,
+          [ids, descs],
         );
       }
       await writeClient.query("COMMIT");

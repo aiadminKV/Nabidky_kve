@@ -3,15 +3,19 @@ import { streamText } from "hono/streaming";
 import { run, user } from "@openai/agents";
 import { authMiddleware } from "../middleware/auth.js";
 import { parserAgent, createOfferAgentStreaming } from "../services/agent/index.js";
-import { searchProductsFulltext, lookupProductsExact } from "../services/search.js";
-import { searchPipelineForSet, createSearchPlan, type PipelineResult, type PipelineDebugFn, type SearchPreferences, type SearchPlan, type GroupContext } from "../services/searchPipeline.js";
+import { lookupProductsExact } from "../services/search.js";
+import { createSearchPlan, searchPipelineForSet } from "../services/searchPipeline.js";
+import type { PipelineResult, PipelineDebugFn, SearchPreferences, SearchPlan, GroupContext } from "../services/types.js";
 import { searchPipelineV2ForItem, type StockLevel } from "../services/searchPipelineV2.js";
 import { buildBatchSummaryEntry, generateSessionId } from "../services/searchLogger.js";
 import { parseExcelForChat, parseCsvForChat, spreadsheetToText } from "../services/excelChat.js";
 import { transcribeAudio } from "../services/audioTranscribe.js";
 import { extractTextFromImage } from "../services/imageOcr.js";
+import { env } from "../config/env.js";
+import { logger } from "../services/logger.js";
 
 const agent = new Hono();
+const isDev = env.NODE_ENV === "development";
 
 interface ParsedItem {
   name: string;
@@ -83,14 +87,15 @@ agent.post("/agent/search", authMiddleware, async (c) => {
   c.header("Connection", "keep-alive");
   c.header("X-Accel-Buffering", "no");
 
-  const CONCURRENCY = 30;
+  const CONCURRENCY = 20;
 
   return streamText(c, async (stream) => {
     const sessionId = generateSessionId();
     const batchT0 = Date.now();
     const matchResults: PipelineResult[] = [];
 
-    const makePipelineDebug = (): PipelineDebugFn => {
+    const makePipelineDebug = (): PipelineDebugFn | undefined => {
+      if (!isDev) return undefined;
       return ({ position, step, data }) => {
         stream
           .write(
@@ -106,15 +111,17 @@ agent.post("/agent/search", authMiddleware, async (c) => {
 
     try {
       await stream.write(sseEvent("status", { phase: "searching", total: items.length }));
-      stream
-        .write(
-          sseEvent("debug", {
-            ts: Date.now(),
-            type: "search_trace",
-            data: { event: "batch_start", sessionId, totalItems: items.length, mode: "pipeline" },
-          }),
-        )
-        .catch(() => {});
+      if (isDev) {
+        stream
+          .write(
+            sseEvent("debug", {
+              ts: Date.now(),
+              type: "search_trace",
+              data: { event: "batch_start", sessionId, totalItems: items.length, mode: "pipeline" },
+            }),
+          )
+          .catch(() => {});
+      }
 
       for (let i = 0; i < items.length; i++) {
         await stream.write(sseEvent("item_searching", { position: i, name: items[i].name }));
@@ -130,9 +137,37 @@ agent.post("/agent/search", authMiddleware, async (c) => {
         const item = items[idx]!;
         const gc = groupContexts?.[idx];
         try {
-          // Set decomposition temporarily disabled — all items go through V2 pipeline directly.
-          // if (item.isSet && item.setHint) { ... }
-          {
+          if (item.isSet) {
+            const parentItemId = crypto.randomUUID();
+            const setResult = await searchPipelineForSet(
+              { ...item, isSet: true as const, setHint: item.setHint ?? item.name },
+              idx,
+              parentItemId,
+              onDebug,
+              searchPreferences,
+              gc,
+              // Use V2 (ReAct agent) for component search — better at product-line disambiguation
+              (compItem, pos, dbg, prefs, gc2) => searchPipelineV2ForItem(compItem, pos, dbg, prefs, gc2),
+            );
+            const parentSummary: PipelineResult = {
+              position: idx,
+              originalName: item.name,
+              unit: item.unit,
+              quantity: item.quantity,
+              matchType: "match",
+              confidence: 100,
+              product: null,
+              candidates: [],
+              reasoning: `Sada rozložena na ${setResult.components.length} komponent`,
+              priceNote: null,
+              reformulatedQuery: "",
+              pipelineMs: setResult.totalPipelineMs,
+              exactLookupAttempted: false,
+              exactLookupFound: false,
+            };
+            matchResults.push(parentSummary);
+            await stream.write(sseEvent("set_matched", setResult));
+          } else {
             const result = await searchPipelineV2ForItem(item, idx, onDebug, searchPreferences, gc);
             matchResults.push(result);
             await stream.write(sseEvent("item_matched", result));
@@ -167,11 +202,13 @@ agent.post("/agent/search", authMiddleware, async (c) => {
       );
       await Promise.all(workers);
 
-      stream
-        .write(
-          sseEvent("debug", buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0)),
-        )
-        .catch(() => {});
+      if (isDev) {
+        stream
+          .write(
+            sseEvent("debug", buildBatchSummaryEntry(sessionId, items.length, matchResults, Date.now() - batchT0)),
+          )
+          .catch(() => {});
+      }
       await stream.write(sseEvent("status", { phase: "review" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -197,36 +234,16 @@ agent.post("/agent/product-search", authMiddleware, async (c) => {
   }
 
   try {
-    const [fulltextResults, exactResults] = await Promise.all([
-      searchProductsFulltext(query, maxResults).catch(() => []),
-      lookupProductsExact(query, maxResults).catch(() => []),
-    ]);
-
-    const seen = new Set<string>();
-    const combined: Array<Record<string, unknown>> = [];
-
-    for (const r of exactResults) {
-      if (!seen.has(r.sku)) {
-        seen.add(r.sku);
-        combined.push({ ...r, _source: "exact" });
-      }
-    }
-    for (const r of fulltextResults) {
-      if (!seen.has(r.sku)) {
-        seen.add(r.sku);
-        combined.push({ ...r, _source: "fulltext" });
-      }
-    }
-
-    return c.json({ results: combined.slice(0, maxResults) });
+    const results = await lookupProductsExact(query, maxResults).catch(() => []);
+    return c.json({ results: results.map((r) => ({ ...r, _source: "exact" })) });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Search failed";
+    const msg = err instanceof Error ? err.message : "Lookup failed";
     return c.json({ error: msg }, 500);
   }
 });
 
 // Old agent-based search functions removed.
-// Batch search now uses the deterministic pipeline (searchPipelineForItem)
+// Batch search uses searchPipelineV2ForItem
 
 /**
  * POST /agent/search-plan
@@ -247,7 +264,7 @@ agent.post("/agent/search-plan", authMiddleware, async (c) => {
     return c.json({ plan });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Planning failed";
-    console.error("[search-plan] Error:", msg);
+    logger.error({ err: msg }, "search-plan failed");
     return c.json({ error: msg }, 500);
   }
 });
@@ -262,8 +279,27 @@ interface OfferItemSummary {
   matchType: string;
 }
 
-function buildOfferContext(items: OfferItemSummary[]): string {
-  if (items.length === 0) return "Nabídka je prázdná – žádné položky.";
+function describeSearchPreferences(prefs?: SearchPreferences): string {
+  if (!prefs || prefs.stockFilter === "any") {
+    return "Celý katalog (bez filtru skladu)";
+  }
+  if (prefs.stockFilter === "in_stock") {
+    return "Celý katalog – pouze produkty aktuálně skladem";
+  }
+  if (prefs.stockFilter === "stock_items_only") {
+    if (prefs.branchFilter) return `Pouze skladovky – pobočka ${prefs.branchFilter}`;
+    return "Pouze skladovky (kdekoliv)";
+  }
+  if (prefs.stockFilter === "stock_items_in_stock") {
+    return "Pouze skladovky aktuálně skladem";
+  }
+  return "Celý katalog";
+}
+
+function buildOfferContext(items: OfferItemSummary[], prefs?: SearchPreferences): string {
+  const prefsLine = `Aktuální filtr vyhledávání: ${describeSearchPreferences(prefs)}`;
+
+  if (items.length === 0) return `${prefsLine}\nNabídka je prázdná – žádné položky.`;
 
   const header = "# | itemId | Název | Výrobce | SKU | Stav";
   const divider = "---|---|---|---|---|---";
@@ -271,7 +307,7 @@ function buildOfferContext(items: OfferItemSummary[]): string {
     (i) =>
       `${i.displayNumber} | ${i.itemId} | ${i.name} | ${i.manufacturer ?? "–"} | ${i.sku ?? "–"} | ${i.matchType}`,
   );
-  return `Aktuální nabídka (${items.length} položek):\n${header}\n${divider}\n${rows.join("\n")}`;
+  return `${prefsLine}\n\nAktuální nabídka (${items.length} položek):\n${header}\n${divider}\n${rows.join("\n")}`;
 }
 
 interface FileAttachmentInput {
@@ -286,7 +322,6 @@ const ACTION_TOOL_NAMES = new Set([
   "replace_product_in_offer",
   "parse_items_from_text",
   "process_items",
-  "update_offer_header",
 ]);
 
 /**
@@ -326,10 +361,12 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
     try {
       await safeWrite(sseEvent("status", { phase: "thinking" }));
 
-      const offerContext = buildOfferContext(offerItems ?? []);
+      const offerContext = buildOfferContext(offerItems ?? [], searchPreferences);
       const promptText = `${offerContext}\n\n---\n\nZpráva uživatele:\n"${message}"`;
 
-      await safeWrite(sseEvent("debug", { ts: Date.now(), type: "prompt", data: promptText }));
+      if (isDev) {
+        await safeWrite(sseEvent("debug", { ts: Date.now(), type: "prompt", data: promptText }));
+      }
 
       const offerAgent = createOfferAgentStreaming(async (entry) => {
         if (entry.type === "action") {
@@ -342,7 +379,7 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
           await safeWrite(sseEvent("item_matched", entry.data));
         } else if (entry.type === "status") {
           await safeWrite(sseEvent("status", entry.data));
-        } else {
+        } else if (isDev) {
           await safeWrite(sseEvent("debug", { ts: Date.now(), ...entry }));
         }
       }, searchPreferences);
@@ -435,7 +472,7 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
           }
         } else if (event.type === "run_item_stream_event") {
           const evt = event as unknown as { name: string; item: { name?: string } };
-          if (evt.name === "tool_called") {
+          if (isDev && evt.name === "tool_called") {
             const toolName = evt.item?.name ?? "";
             if (ACTION_TOOL_NAMES.has(toolName)) {
               await safeWrite(sseEvent("debug", {
@@ -455,7 +492,9 @@ agent.post("/agent/offer-chat", authMiddleware, async (c) => {
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      await safeWrite(sseEvent("debug", { ts: Date.now(), type: "error", data: msg }));
+      if (isDev) {
+        await safeWrite(sseEvent("debug", { ts: Date.now(), type: "error", data: msg }));
+      }
       await safeWrite(sseEvent("error", { message: msg }));
     }
 

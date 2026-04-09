@@ -647,8 +647,25 @@ export async function searchCustomers(
 
 // ── Manufacturers ────────────────────────────────────────
 
-export async function getManufacturers(token: string): Promise<string[]> {
-  const res = await fetch(`${BACKEND_URL}/manufacturers`, {
+export interface CategoryEntry {
+  category_code: string;
+  category_name: string;
+  level: number;
+  parent_code: string | null;
+}
+
+export async function getCategories(token: string): Promise<CategoryEntry[]> {
+  const res = await fetch(`${BACKEND_URL}/categories`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.categories ?? [];
+}
+
+export async function searchManufacturers(token: string, q: string): Promise<string[]> {
+  if (q.trim().length < 2) return [];
+  const res = await fetch(`${BACKEND_URL}/manufacturers?q=${encodeURIComponent(q.trim())}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return [];
@@ -665,6 +682,10 @@ export interface SearchPlanGroup {
   suggestedLine: string | null;
   notes: string | null;
   itemIndices: number[];
+  /** When true, all items in this group are treated as sets and decomposed into components */
+  treatAsSet?: boolean;
+  /** When true, all items in this group are excluded from search entirely */
+  skip?: boolean;
 }
 
 export interface SearchPlan {
@@ -677,6 +698,7 @@ export interface SearchPlan {
     groupIndex: number;
     isSet?: boolean;
     setHint?: string | null;
+    skip?: boolean;
   }>;
 }
 
