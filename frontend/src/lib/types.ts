@@ -108,7 +108,7 @@ export interface GroupContext {
   preferredLine: string | null;
 }
 
-export type StockLevel = "branch" | "stock_item" | "in_stock" | "any";
+export type StockLevel = "branch" | "stock_item" | "stock_item_in_stock" | "in_stock" | "any";
 
 export interface StockContext {
   requestedLevel: StockLevel;

@@ -202,7 +202,7 @@ export function ReviewModal({ item, onConfirm, onSkip, onClose, onSaveEdits, onS
   const hasTextChanges =
     editedName.trim() !== item.originalName ||
     (editedQuantity.trim() ? Number(editedQuantity) : item.quantity) !== item.quantity ||
-    (editedUnit.trim() || item.unit ?? "") !== (item.unit ?? "");
+    (editedUnit.trim() || (item.unit ?? "")) !== (item.unit ?? "");
 
   const handleClose = useCallback(() => {
     if (hasTextChanges && onSaveEdits) onSaveEdits(buildEditedItem());

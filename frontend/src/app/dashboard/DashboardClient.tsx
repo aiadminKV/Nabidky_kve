@@ -10,7 +10,6 @@ import { ResultsTable } from "@/components/ResultsTable";
 import { ReviewModal } from "@/components/ReviewModal";
 import { OfferHeaderForm } from "@/components/OfferHeaderForm";
 import { createClient } from "@/lib/supabase/client";
-import type { ParsedItem } from "@/lib/types";
 import { offerChat, searchItems, downloadXlsx, downloadSapXlsx, getSearchPlan, searchItemWithStockLevel, type SearchPlan } from "@/lib/api";
 import { SearchPlanPanel } from "@/components/SearchPlanPanel";
 import { PreSearchModal } from "@/components/PreSearchModal";

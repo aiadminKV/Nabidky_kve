@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -76,8 +76,9 @@ function AddToOfferModal({ product, onClose, token }: AddToOfferModalProps) {
     loadOffers();
   }, [loadOffers]);
 
-  // Load on mount
-  useState(() => { handleOpen(); });
+  useEffect(() => {
+    handleOpen();
+  }, [handleOpen]);
 
   const handleSelectOffer = useCallback((offerId: string) => {
     // Navigate to the offer — the user can then add the item via chat or manually
@@ -239,9 +240,11 @@ export function SearchClient({ email, isAdmin }: SearchClientProps) {
     if (e.key === "Enter") handleSearch();
   }, [handleSearch]);
 
-  const offerTypeOptions: Array<{ value: SearchPreferences["offerType"]; label: string }> = [
-    { value: "realizace", label: "Realizace" },
-    { value: "vyberko", label: "Výběrko" },
+  const stockFilterOptions: Array<{ value: SearchPreferences["stockFilter"]; label: string }> = [
+    { value: "any", label: "Vše" },
+    { value: "in_stock", label: "Skladem" },
+    { value: "stock_items_only", label: "Skladovky" },
+    { value: "stock_items_in_stock", label: "Skladovky skladem" },
   ];
 
   return (
@@ -296,33 +299,18 @@ export function SearchClient({ email, isAdmin }: SearchClientProps) {
 
             {/* Preferences */}
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-kv-gray-100 pt-3">
-              <span className="text-[11px] font-medium text-kv-gray-400 uppercase tracking-wider">Typ nabídky:</span>
-              {offerTypeOptions.map((opt) => (
+              <span className="text-[11px] font-medium text-kv-gray-400 uppercase tracking-wider">Sklad:</span>
+              {stockFilterOptions.map((opt) => (
                 <button
                   key={opt.value}
-                  onClick={() => setPreferences((p) => ({ ...p, offerType: opt.value }))}
+                  onClick={() => setPreferences((p) => ({ ...p, stockFilter: opt.value }))}
                   className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                    preferences.offerType === opt.value
+                    preferences.stockFilter === opt.value
                       ? "border-kv-navy bg-kv-navy text-white"
                       : "border-kv-gray-200 bg-white text-kv-gray-600 hover:border-kv-navy/40"
                   }`}
                 >
                   {opt.label}
-                </button>
-              ))}
-              <div className="h-4 w-px bg-kv-gray-200 mx-1" />
-              <span className="text-[11px] font-medium text-kv-gray-400 uppercase tracking-wider">Sklad:</span>
-              {(["any", "in_stock"] as const).map((val) => (
-                <button
-                  key={val}
-                  onClick={() => setPreferences((p) => ({ ...p, stockFilter: val }))}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                    preferences.stockFilter === val
-                      ? "border-kv-navy bg-kv-navy text-white"
-                      : "border-kv-gray-200 bg-white text-kv-gray-600 hover:border-kv-navy/40"
-                  }`}
-                >
-                  {val === "any" ? "Vše" : "Skladem"}
                 </button>
               ))}
             </div>
